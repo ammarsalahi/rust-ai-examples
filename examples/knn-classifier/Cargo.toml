@@ -1,0 +1,15 @@
+[package]
+name = "knn-classifier"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+csv = "1"
+linfa = "0.8"
+linfa-nn = "0.8"
+linfa-nearest-neighbors = "0.8"
+ndarray = "0.16"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
