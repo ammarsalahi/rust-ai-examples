@@ -1,0 +1,777 @@
+use anyhow::{Context, Result, bail};
+use candle_core::{DType, Device, IndexOp, Tensor};
+use candle_nn::{Module, VarBuilder};
+use candle_transformers::models::distilbert::{Config as DistilBertConfig, DTYPE, DistilBertModel};
+use clap::{Parser, Subcommand};
+use hf_hub::api::sync::Api;
+use serde::Deserialize;
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use tokenizers::Tokenizer;
+
+// ============================================================
+// CONFIGURATION
+// ============================================================
+
+const MODEL_DIR: &str = "models";
+const DATASET_PATH: &str = "data/dataset.csv";
+
+const MODEL_REPO: &str = "distilbert/distilbert-base-uncased-finetuned-sst-2-english";
+
+const MAX_SEQUENCE_LENGTH: usize = 128;
+
+const REQUIRED_MODEL_FILES: &[&str] = &[
+    "config.json",
+    "model.safetensors",
+    "tokenizer.json",
+    "vocab.txt",
+];
+
+// ============================================================
+// CLI
+// ============================================================
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "sentiment-classifier",
+    version,
+    about = "Sentiment analysis with Rust, Candle, and DistilBERT"
+)]
+struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Predict the sentiment of custom text.
+    Predict {
+        /// Text to classify.
+        #[arg(required = true)]
+        text: Vec<String>,
+    },
+
+    /// Evaluate the default CSV dataset.
+    Evaluate {
+        /// Evaluate only the first N rows.
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+
+    /// Evaluate a custom CSV dataset.
+    EvaluateFile {
+        /// CSV file path.
+        path: PathBuf,
+
+        /// Evaluate only the first N rows.
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+}
+
+// ============================================================
+// MODEL CONFIG
+// ============================================================
+
+#[derive(Debug, Deserialize)]
+struct ModelConfig {
+    #[serde(default = "default_num_labels")]
+    num_labels: usize,
+
+    #[serde(default = "default_max_position_embeddings")]
+    max_position_embeddings: usize,
+}
+
+fn default_num_labels() -> usize {
+    2
+}
+
+fn default_max_position_embeddings() -> usize {
+    512
+}
+
+// ============================================================
+// SENTIMENT TYPES
+// ============================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sentiment {
+    Negative,
+    Positive,
+}
+
+impl Sentiment {
+    fn from_id(id: usize) -> Result<Self> {
+        match id {
+            0 => Ok(Self::Negative),
+            1 => Ok(Self::Positive),
+            _ => bail!("Unexpected sentiment label ID: {id}"),
+        }
+    }
+
+    fn from_dataset_label(label: &str) -> Result<Self> {
+        let normalized = label.trim().to_ascii_uppercase();
+
+        match normalized.as_str() {
+            "0" | "NEGATIVE" => Ok(Self::Negative),
+            "1" | "POSITIVE" => Ok(Self::Positive),
+            _ => bail!(
+                "Unsupported dataset label '{label}'. \
+                 Expected 0, 1, NEGATIVE, or POSITIVE."
+            ),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Negative => "NEGATIVE",
+            Self::Positive => "POSITIVE",
+        }
+    }
+
+    fn id(self) -> usize {
+        match self {
+            Self::Negative => 0,
+            Self::Positive => 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Prediction {
+    sentiment: Sentiment,
+    confidence: f32,
+    negative_probability: f32,
+    positive_probability: f32,
+}
+
+// ============================================================
+// HUGGING FACE MODEL DOWNLOAD
+// ============================================================
+
+fn ensure_model_files() -> Result<()> {
+    let model_dir = Path::new(MODEL_DIR);
+
+    fs::create_dir_all(model_dir).context("Failed to create models directory")?;
+
+    let missing_files: Vec<&str> = REQUIRED_MODEL_FILES
+        .iter()
+        .copied()
+        .filter(|filename| {
+            let path = model_dir.join(filename);
+
+            match fs::metadata(path) {
+                Ok(metadata) => !metadata.is_file() || metadata.len() == 0,
+                Err(_) => true,
+            }
+        })
+        .collect();
+
+    if missing_files.is_empty() {
+        println!("Model files already exist.");
+        println!("Skipping download.\n");
+
+        return Ok(());
+    }
+
+    println!("==================================================");
+    println!("          DOWNLOADING SENTIMENT MODEL");
+    println!("==================================================");
+    println!("Repository: {MODEL_REPO}");
+    println!("Destination: {}\n", model_dir.display());
+
+    println!("Connecting to Hugging Face Hub...");
+
+    // This public repository does not require a Hugging Face token.
+    let api = Api::new().context("Could not initialize the Hugging Face Hub client")?;
+
+    let repo = api.model(MODEL_REPO.to_string());
+
+    for filename in missing_files {
+        let destination = model_dir.join(filename);
+
+        println!("\nDownloading {filename}...");
+
+        let downloaded_path = repo.get(filename).with_context(|| {
+            format!(
+                "Failed to download '{filename}' from {MODEL_REPO}. \
+                     Check your internet connection and repository access."
+            )
+        })?;
+
+        // Copy to a temporary file before replacing the destination.
+        let temporary_destination = model_dir.join(format!("{filename}.download"));
+
+        fs::copy(&downloaded_path, &temporary_destination)
+            .with_context(|| format!("Failed to copy downloaded file '{filename}'"))?;
+
+        fs::rename(&temporary_destination, &destination)
+            .with_context(|| format!("Failed to finalize model file '{filename}'"))?;
+
+        println!("Saved: {}", destination.display());
+    }
+
+    println!("\nAll required model files are ready.\n");
+
+    Ok(())
+}
+
+// ============================================================
+// MODEL
+// ============================================================
+
+struct SentimentModel {
+    encoder: DistilBertModel,
+    pre_classifier: candle_nn::Linear,
+    classifier: candle_nn::Linear,
+    device: Device,
+    max_sequence_length: usize,
+}
+
+impl SentimentModel {
+    fn load(model_dir: &str, device: &Device) -> Result<Self> {
+        let model_path = Path::new(model_dir);
+
+        let config_path = model_path.join("config.json");
+        let weights_path = model_path.join("model.safetensors");
+
+        let config_text = fs::read_to_string(&config_path)
+            .with_context(|| format!("Failed to read {}", config_path.display()))?;
+
+        let model_config: ModelConfig =
+            serde_json::from_str(&config_text).context("Failed to parse model config.json")?;
+
+        if model_config.num_labels != 2 {
+            bail!(
+                "This implementation expects a binary classifier, \
+                 but the model declares {} labels.",
+                model_config.num_labels
+            );
+        }
+
+        let distilbert_config: DistilBertConfig = serde_json::from_str(&config_text)
+            .context("Failed to deserialize DistilBERT configuration")?;
+
+        println!("Loading SafeTensors weights...");
+
+        // SafeTensors weights are memory-mapped by Candle.
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[weights_path], DTYPE, device)? };
+
+        println!("Loading DistilBERT encoder...");
+
+        let encoder = DistilBertModel::load(vb.pp("distilbert"), &distilbert_config)
+            .context("Failed to load DistilBERT encoder weights")?;
+
+        println!("Loading classification head...");
+
+        // These layers load the pretrained SST-2 classification weights.
+        let pre_classifier = candle_nn::linear(
+            distilbert_config.dim,
+            distilbert_config.dim,
+            vb.pp("pre_classifier"),
+        )
+        .context("Failed to load pre_classifier weights")?;
+
+        let classifier = candle_nn::linear(
+            distilbert_config.dim,
+            model_config.num_labels,
+            vb.pp("classifier"),
+        )
+        .context("Failed to load classifier weights")?;
+
+        let max_sequence_length = MAX_SEQUENCE_LENGTH.min(model_config.max_position_embeddings);
+
+        Ok(Self {
+            encoder,
+            pre_classifier,
+            classifier,
+            device: device.clone(),
+            max_sequence_length,
+        })
+    }
+
+    fn predict(&self, tokenizer: &Tokenizer, text: &str) -> Result<Prediction> {
+        let text = text.trim();
+
+        if text.is_empty() {
+            bail!("Input text cannot be empty.");
+        }
+
+        // Tokenize text and add special tokens.
+        let encoding = tokenizer
+            .encode(text, true)
+            .map_err(|error| anyhow::anyhow!("Tokenization failed: {error}"))?;
+
+        let ids = encoding.get_ids();
+
+        if ids.is_empty() {
+            bail!("Tokenizer produced an empty sequence.");
+        }
+
+        // Restrict sequence length to the configured model limit.
+        let sequence_length = ids.len().min(self.max_sequence_length);
+        let input_ids: Vec<u32> = ids[..sequence_length].to_vec();
+
+        // Every token in this single, unpadded sequence is valid.
+        let attention_values = vec![1u32; sequence_length];
+
+        let input_tensor = Tensor::new(input_ids.as_slice(), &self.device)?.unsqueeze(0)?;
+
+        // DistilBERT's Candle implementation expects a mask that marks
+        // positions to exclude from attention. Therefore, invert the
+        // usual tokenizer attention mask.
+        let attention_mask = Tensor::new(attention_values.as_slice(), &self.device)?
+            .eq(0u32)?
+            .reshape((1, 1, 1, sequence_length))?;
+
+        // Encoder output shape: [batch_size, sequence_length, hidden_size].
+        let hidden_states = self.encoder.forward(&input_tensor, &attention_mask)?;
+
+        // SST-2 classification uses the first token representation.
+        let cls_hidden_state = hidden_states.i((0, 0))?;
+
+        // Pretrained DistilBERT sequence-classification head:
+        // pre_classifier -> ReLU -> classifier -> softmax.
+        let pooled = self.pre_classifier.forward(&cls_hidden_state)?.relu()?;
+
+        let logits = self.classifier.forward(&pooled)?;
+
+        let probabilities = candle_nn::ops::softmax(&logits, candle_core::D::Minus1)?;
+
+        let probabilities: Vec<f32> = probabilities.to_vec1()?;
+
+        if probabilities.len() != 2 {
+            bail!(
+                "Expected two output probabilities, got {}",
+                probabilities.len()
+            );
+        }
+
+        let negative_probability = probabilities[0];
+        let positive_probability = probabilities[1];
+
+        let predicted_id = if positive_probability >= negative_probability {
+            1
+        } else {
+            0
+        };
+
+        let sentiment = Sentiment::from_id(predicted_id)?;
+
+        let confidence = match sentiment {
+            Sentiment::Negative => negative_probability,
+            Sentiment::Positive => positive_probability,
+        };
+
+        Ok(Prediction {
+            sentiment,
+            confidence,
+            negative_probability,
+            positive_probability,
+        })
+    }
+}
+
+// ============================================================
+// TOKENIZER
+// ============================================================
+
+fn load_tokenizer() -> Result<Tokenizer> {
+    let tokenizer_path = Path::new(MODEL_DIR).join("tokenizer.json");
+
+    Tokenizer::from_file(&tokenizer_path).map_err(|error| {
+        anyhow::anyhow!(
+            "Failed to load tokenizer {}: {error}",
+            tokenizer_path.display()
+        )
+    })
+}
+
+// ============================================================
+// PREDICTION OUTPUT
+// ============================================================
+
+fn print_prediction(text: &str, prediction: &Prediction) {
+    println!("\n==================================================");
+    println!("                 SENTIMENT RESULT");
+    println!("==================================================");
+
+    println!("Text: {text}");
+
+    println!("Sentiment: {}", prediction.sentiment.as_str());
+
+    println!("Confidence: {:.2}%", prediction.confidence * 100.0);
+
+    println!("\nClass probabilities:");
+
+    println!(
+        "  NEGATIVE: {:.2}%",
+        prediction.negative_probability * 100.0
+    );
+
+    println!(
+        "  POSITIVE: {:.2}%",
+        prediction.positive_probability * 100.0
+    );
+
+    println!("==================================================\n");
+}
+
+// ============================================================
+// DATASET
+// ============================================================
+
+#[derive(Debug, Clone)]
+struct DatasetRow {
+    text: String,
+    label: Sentiment,
+}
+
+fn load_dataset(path: &Path) -> Result<Vec<DatasetRow>> {
+    if !path.exists() {
+        bail!(
+            "Dataset not found: {}\n\
+             Expected CSV columns: text,label",
+            path.display()
+        );
+    }
+
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .flexible(false)
+        .from_path(path)
+        .with_context(|| format!("Failed to open dataset {}", path.display()))?;
+
+    let headers = reader
+        .headers()
+        .context("Failed to read CSV headers")?
+        .clone();
+
+    let text_index = headers
+        .iter()
+        .position(|header| header.trim().eq_ignore_ascii_case("text"))
+        .context("CSV is missing the 'text' column")?;
+
+    let label_index = headers
+        .iter()
+        .position(|header| header.trim().eq_ignore_ascii_case("label"))
+        .context("CSV is missing the 'label' column")?;
+
+    let mut dataset = Vec::new();
+
+    for (index, result) in reader.records().enumerate() {
+        let record =
+            result.with_context(|| format!("Failed to parse CSV record at row {}", index + 2))?;
+
+        let text = record
+            .get(text_index)
+            .context("Missing text field")?
+            .trim()
+            .to_string();
+
+        let label_text = record
+            .get(label_index)
+            .context("Missing label field")?
+            .trim();
+
+        if text.is_empty() {
+            continue;
+        }
+
+        let label = Sentiment::from_dataset_label(label_text)
+            .with_context(|| format!("Invalid label at CSV row {}", index + 2))?;
+
+        dataset.push(DatasetRow { text, label });
+    }
+
+    if dataset.is_empty() {
+        bail!("Dataset contains no usable rows.");
+    }
+
+    Ok(dataset)
+}
+
+// ============================================================
+// EVALUATION METRICS
+// ============================================================
+
+#[derive(Debug, Default)]
+struct EvaluationMetrics {
+    true_positive: usize,
+    true_negative: usize,
+    false_positive: usize,
+    false_negative: usize,
+    correct: usize,
+    total: usize,
+}
+
+impl EvaluationMetrics {
+    fn update(&mut self, actual: Sentiment, predicted: Sentiment) {
+        self.total += 1;
+
+        if actual == predicted {
+            self.correct += 1;
+        }
+
+        match (actual, predicted) {
+            (Sentiment::Positive, Sentiment::Positive) => {
+                self.true_positive += 1;
+            }
+
+            (Sentiment::Negative, Sentiment::Negative) => {
+                self.true_negative += 1;
+            }
+
+            (Sentiment::Negative, Sentiment::Positive) => {
+                self.false_positive += 1;
+            }
+
+            (Sentiment::Positive, Sentiment::Negative) => {
+                self.false_negative += 1;
+            }
+        }
+    }
+
+    fn accuracy(&self) -> f64 {
+        if self.total == 0 {
+            return 0.0;
+        }
+
+        self.correct as f64 / self.total as f64
+    }
+
+    fn precision(&self) -> f64 {
+        let denominator = self.true_positive + self.false_positive;
+
+        if denominator == 0 {
+            return 0.0;
+        }
+
+        self.true_positive as f64 / denominator as f64
+    }
+
+    fn recall(&self) -> f64 {
+        let denominator = self.true_positive + self.false_negative;
+
+        if denominator == 0 {
+            return 0.0;
+        }
+
+        self.true_positive as f64 / denominator as f64
+    }
+
+    fn f1_score(&self) -> f64 {
+        let precision = self.precision();
+        let recall = self.recall();
+
+        if precision + recall == 0.0 {
+            return 0.0;
+        }
+
+        2.0 * precision * recall / (precision + recall)
+    }
+
+    fn print(&self) {
+        println!("\n==================================================");
+        println!("                 EVALUATION");
+        println!("==================================================");
+
+        println!("Total samples: {}", self.total);
+        println!("Correct:       {}", self.correct);
+        println!("Incorrect:     {}", self.total.saturating_sub(self.correct));
+
+        println!("\nMetrics (positive class = POSITIVE):");
+
+        println!(
+            "Accuracy:  {:.4} ({:.2}%)",
+            self.accuracy(),
+            self.accuracy() * 100.0
+        );
+
+        println!("Precision: {:.4}", self.precision());
+        println!("Recall:    {:.4}", self.recall());
+        println!("F1-score:  {:.4}", self.f1_score());
+
+        println!("\nConfusion Matrix:");
+        println!("                  Predicted");
+        println!("                NEG    POS");
+        println!(
+            "Actual NEG     {:>4}   {:>4}",
+            self.true_negative, self.false_positive
+        );
+        println!(
+            "Actual POS     {:>4}   {:>4}",
+            self.false_negative, self.true_positive
+        );
+
+        println!("==================================================\n");
+    }
+}
+
+// ============================================================
+// EVALUATE DATASET
+// ============================================================
+
+fn evaluate_dataset(
+    model: &SentimentModel,
+    tokenizer: &Tokenizer,
+    path: &Path,
+    limit: Option<usize>,
+) -> Result<()> {
+    let dataset = load_dataset(path)?;
+
+    let total_to_evaluate = limit.unwrap_or(dataset.len()).min(dataset.len());
+
+    if total_to_evaluate == 0 {
+        bail!("No samples selected for evaluation.");
+    }
+
+    println!("\n==================================================");
+    println!("              DATASET EVALUATION");
+    println!("==================================================");
+    println!("Dataset: {}", path.display());
+    println!("Available samples: {}", dataset.len());
+    println!("Samples to evaluate: {total_to_evaluate}");
+    println!("==================================================\n");
+
+    let mut metrics = EvaluationMetrics::default();
+
+    for (index, row) in dataset.iter().take(total_to_evaluate).enumerate() {
+        let prediction = model
+            .predict(tokenizer, &row.text)
+            .with_context(|| format!("Prediction failed at dataset row {}", index + 1))?;
+
+        metrics.update(row.label, prediction.sentiment);
+
+        let correct = row.label == prediction.sentiment;
+        let status = if correct { "OK" } else { "WRONG" };
+
+        println!(
+            "[{}/{}] {} | expected={} predicted={} confidence={:.2}%",
+            index + 1,
+            total_to_evaluate,
+            status,
+            row.label.as_str(),
+            prediction.sentiment.as_str(),
+            prediction.confidence * 100.0,
+        );
+
+        println!("  Text: {}", row.text);
+    }
+
+    metrics.print();
+
+    Ok(())
+}
+
+// ============================================================
+// INTERACTIVE MODE
+// ============================================================
+
+fn interactive_mode(model: &SentimentModel, tokenizer: &Tokenizer) -> Result<()> {
+    println!("\n==================================================");
+    println!("           SENTIMENT ANALYSIS CLI");
+    println!("==================================================");
+    println!("Enter text to analyze its sentiment.");
+    println!("Type 'exit' or 'quit' to stop.\n");
+
+    let stdin = io::stdin();
+
+    loop {
+        print!("sentiment> ");
+
+        io::stdout()
+            .flush()
+            .context("Failed to flush terminal output")?;
+
+        let mut input = String::new();
+
+        let bytes_read = stdin
+            .read_line(&mut input)
+            .context("Failed to read input")?;
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        let text = input.trim();
+
+        if text.eq_ignore_ascii_case("exit") || text.eq_ignore_ascii_case("quit") {
+            println!("Goodbye!");
+            break;
+        }
+
+        if text.is_empty() {
+            continue;
+        }
+
+        match model.predict(tokenizer, text) {
+            Ok(prediction) => {
+                print_prediction(text, &prediction);
+            }
+
+            Err(error) => {
+                eprintln!("Prediction error: {error:#}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================
+// MAIN
+// ============================================================
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+
+    println!("==================================================");
+    println!("          RUST SENTIMENT CLASSIFIER");
+    println!("==================================================\n");
+
+    // Step 1: Download missing model files automatically.
+    ensure_model_files()?;
+
+    // Step 2: Load the model on CPU.
+    let device = Device::Cpu;
+
+    println!("Loading sentiment model...");
+
+    let model =
+        SentimentModel::load(MODEL_DIR, &device).context("Failed to load sentiment model")?;
+
+    // Step 3: Load tokenizer.
+    println!("Loading tokenizer...");
+
+    let tokenizer = load_tokenizer()?;
+
+    println!("Model and tokenizer loaded successfully.");
+
+    // Step 4: Run the requested command.
+    match args.command {
+        Some(Command::Predict { text }) => {
+            let text = text.join(" ");
+
+            let prediction = model.predict(&tokenizer, &text)?;
+
+            print_prediction(&text, &prediction);
+        }
+
+        Some(Command::Evaluate { limit }) => {
+            evaluate_dataset(&model, &tokenizer, Path::new(DATASET_PATH), limit)?;
+        }
+
+        Some(Command::EvaluateFile { path, limit }) => {
+            evaluate_dataset(&model, &tokenizer, &path, limit)?;
+        }
+
+        None => {
+            // `cargo run` without arguments starts interactive mode.
+            interactive_mode(&model, &tokenizer)?;
+        }
+    }
+
+    Ok(())
+}
