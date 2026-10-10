@@ -1,0 +1,962 @@
+[
+  {
+    "text": "Hello, how are you today?",
+    "language": "English"
+  },
+  {
+    "text": "The weather is very nice this morning.",
+    "language": "English"
+  },
+  {
+    "text": "I am learning a new programming language.",
+    "language": "English"
+  },
+  {
+    "text": "Software engineering requires careful problem solving.",
+    "language": "English"
+  },
+  {
+    "text": "This project detects the language of a text.",
+    "language": "English"
+  },
+  {
+    "text": "Machine learning can recognize patterns in data.",
+    "language": "English"
+  },
+  {
+    "text": "She reads a book before going to sleep.",
+    "language": "English"
+  },
+  {
+    "text": "We are building an application with Rust.",
+    "language": "English"
+  },
+  {
+    "text": "The train arrives at the station at noon.",
+    "language": "English"
+  },
+  {
+    "text": "Please send me the document tomorrow.",
+    "language": "English"
+  },
+  {
+    "text": "Technology changes the way people communicate.",
+    "language": "English"
+  },
+  {
+    "text": "The children are playing outside in the garden.",
+    "language": "English"
+  },
+  {
+    "text": "I would like a cup of coffee, please.",
+    "language": "English"
+  },
+  {
+    "text": "Today we are studying natural language processing.",
+    "language": "English"
+  },
+  {
+    "text": "The server stores information in a database.",
+    "language": "English"
+  },
+  {
+    "text": "He works at a small software company.",
+    "language": "English"
+  },
+  {
+    "text": "Can you explain how this algorithm works?",
+    "language": "English"
+  },
+  {
+    "text": "The river flows through the center of the city.",
+    "language": "English"
+  },
+  {
+    "text": "I usually walk to work when the weather is good.",
+    "language": "English"
+  },
+  {
+    "text": "Learning every day helps you improve your skills.",
+    "language": "English"
+  },
+  {
+    "text": "Please close the window before you leave.",
+    "language": "English"
+  },
+  {
+    "text": "The meeting will start in fifteen minutes.",
+    "language": "English"
+  },
+  {
+    "text": "Music makes the long journey more enjoyable.",
+    "language": "English"
+  },
+  {
+    "text": "We need more examples to train the classifier.",
+    "language": "English"
+  },
+  {
+    "text": "English uses the Latin alphabet.",
+    "language": "English"
+  },
+  {
+    "text": "Could you help me find the nearest library?",
+    "language": "English"
+  },
+  {
+    "text": "The application runs locally without an internet connection.",
+    "language": "English"
+  },
+  {
+    "text": "Accurate evaluation requires separate training and test data.",
+    "language": "English"
+  },
+  {
+    "text": "She wrote a short message to her friend.",
+    "language": "English"
+  },
+  {
+    "text": "The computer finished processing the file.",
+    "language": "English"
+  },
+  {
+    "text": "سلام، امروز حال شما چطور است؟",
+    "language": "Persian"
+  },
+  {
+    "text": "هوای امروز بسیار خوب و دلپذیر است.",
+    "language": "Persian"
+  },
+  {
+    "text": "من در حال یادگیری یک زبان برنامه‌نویسی جدید هستم.",
+    "language": "Persian"
+  },
+  {
+    "text": "مهندسی نرم‌افزار به حل دقیق مسئله نیاز دارد.",
+    "language": "Persian"
+  },
+  {
+    "text": "این پروژه زبان یک متن را تشخیص می‌دهد.",
+    "language": "Persian"
+  },
+  {
+    "text": "یادگیری ماشین می‌تواند الگوهای موجود در داده‌ها را شناسایی کند.",
+    "language": "Persian"
+  },
+  {
+    "text": "او پیش از خواب یک کتاب می‌خواند.",
+    "language": "Persian"
+  },
+  {
+    "text": "ما در حال ساخت یک برنامه با زبان راست هستیم.",
+    "language": "Persian"
+  },
+  {
+    "text": "قطار ظهر به ایستگاه می‌رسد.",
+    "language": "Persian"
+  },
+  {
+    "text": "لطفاً سند را فردا برای من ارسال کن.",
+    "language": "Persian"
+  },
+  {
+    "text": "فناوری روش ارتباط مردم را تغییر می‌دهد.",
+    "language": "Persian"
+  },
+  {
+    "text": "بچه‌ها در باغ بیرون از خانه بازی می‌کنند.",
+    "language": "Persian"
+  },
+  {
+    "text": "لطفاً یک فنجان قهوه به من بدهید.",
+    "language": "Persian"
+  },
+  {
+    "text": "امروز پردازش زبان طبیعی را مطالعه می‌کنیم.",
+    "language": "Persian"
+  },
+  {
+    "text": "سرور اطلاعات را در پایگاه داده ذخیره می‌کند.",
+    "language": "Persian"
+  },
+  {
+    "text": "او در یک شرکت نرم‌افزاری کوچک کار می‌کند.",
+    "language": "Persian"
+  },
+  {
+    "text": "می‌توانی توضیح بدهی این الگوریتم چگونه کار می‌کند؟",
+    "language": "Persian"
+  },
+  {
+    "text": "رودخانه از مرکز شهر عبور می‌کند.",
+    "language": "Persian"
+  },
+  {
+    "text": "وقتی هوا خوب باشد معمولاً پیاده به محل کار می‌روم.",
+    "language": "Persian"
+  },
+  {
+    "text": "تمرین روزانه به بهتر شدن مهارت‌ها کمک می‌کند.",
+    "language": "Persian"
+  },
+  {
+    "text": "لطفاً پیش از رفتن پنجره را ببند.",
+    "language": "Persian"
+  },
+  {
+    "text": "جلسه پانزده دقیقه دیگر شروع می‌شود.",
+    "language": "Persian"
+  },
+  {
+    "text": "موسیقی سفر طولانی را لذت‌بخش‌تر می‌کند.",
+    "language": "Persian"
+  },
+  {
+    "text": "برای آموزش دسته‌بند به نمونه‌های بیشتری نیاز داریم.",
+    "language": "Persian"
+  },
+  {
+    "text": "زبان فارسی با خط فارسی نوشته می‌شود.",
+    "language": "Persian"
+  },
+  {
+    "text": "می‌توانی نزدیک‌ترین کتابخانه را به من نشان بدهی؟",
+    "language": "Persian"
+  },
+  {
+    "text": "این برنامه بدون اتصال به اینترنت به صورت محلی اجرا می‌شود.",
+    "language": "Persian"
+  },
+  {
+    "text": "ارزیابی دقیق به داده‌های آموزشی و آزمایشی جداگانه نیاز دارد.",
+    "language": "Persian"
+  },
+  {
+    "text": "او پیام کوتاهی برای دوستش نوشت.",
+    "language": "Persian"
+  },
+  {
+    "text": "رایانه پردازش فایل را به پایان رساند.",
+    "language": "Persian"
+  },
+  {
+    "text": "مرحبا، كيف حالك اليوم؟",
+    "language": "Arabic"
+  },
+  {
+    "text": "الطقس جميل جدا هذا الصباح.",
+    "language": "Arabic"
+  },
+  {
+    "text": "أنا أتعلم لغة برمجة جديدة.",
+    "language": "Arabic"
+  },
+  {
+    "text": "تتطلب هندسة البرمجيات حل المشكلات بعناية.",
+    "language": "Arabic"
+  },
+  {
+    "text": "يحدد هذا المشروع لغة النص.",
+    "language": "Arabic"
+  },
+  {
+    "text": "يمكن للتعلم الآلي اكتشاف الأنماط في البيانات.",
+    "language": "Arabic"
+  },
+  {
+    "text": "تقرأ كتابا قبل الذهاب إلى النوم.",
+    "language": "Arabic"
+  },
+  {
+    "text": "نحن نبني تطبيقا باستخدام لغة راست.",
+    "language": "Arabic"
+  },
+  {
+    "text": "يصل القطار إلى المحطة عند الظهر.",
+    "language": "Arabic"
+  },
+  {
+    "text": "يرجى إرسال المستند إلي غدا.",
+    "language": "Arabic"
+  },
+  {
+    "text": "تغير التكنولوجيا طريقة تواصل الناس.",
+    "language": "Arabic"
+  },
+  {
+    "text": "يلعب الأطفال في الحديقة بالخارج.",
+    "language": "Arabic"
+  },
+  {
+    "text": "أريد فنجانا من القهوة من فضلك.",
+    "language": "Arabic"
+  },
+  {
+    "text": "ندرس اليوم معالجة اللغة الطبيعية.",
+    "language": "Arabic"
+  },
+  {
+    "text": "يخزن الخادم المعلومات في قاعدة بيانات.",
+    "language": "Arabic"
+  },
+  {
+    "text": "يعمل في شركة برمجيات صغيرة.",
+    "language": "Arabic"
+  },
+  {
+    "text": "هل يمكنك شرح طريقة عمل هذه الخوارزمية؟",
+    "language": "Arabic"
+  },
+  {
+    "text": "يمر النهر عبر وسط المدينة.",
+    "language": "Arabic"
+  },
+  {
+    "text": "أمشي عادة إلى العمل عندما يكون الطقس جيدا.",
+    "language": "Arabic"
+  },
+  {
+    "text": "يساعد التعلم اليومي على تحسين مهاراتك.",
+    "language": "Arabic"
+  },
+  {
+    "text": "يرجى إغلاق النافذة قبل المغادرة.",
+    "language": "Arabic"
+  },
+  {
+    "text": "سيبدأ الاجتماع بعد خمس عشرة دقيقة.",
+    "language": "Arabic"
+  },
+  {
+    "text": "تجعل الموسيقى الرحلة الطويلة أكثر متعة.",
+    "language": "Arabic"
+  },
+  {
+    "text": "نحتاج إلى مزيد من الأمثلة لتدريب المصنف.",
+    "language": "Arabic"
+  },
+  {
+    "text": "تستخدم اللغة العربية الأبجدية العربية.",
+    "language": "Arabic"
+  },
+  {
+    "text": "هل يمكنك مساعدتي في العثور على أقرب مكتبة؟",
+    "language": "Arabic"
+  },
+  {
+    "text": "يعمل التطبيق محليا دون اتصال بالإنترنت.",
+    "language": "Arabic"
+  },
+  {
+    "text": "يتطلب التقييم الدقيق بيانات تدريب واختبار منفصلة.",
+    "language": "Arabic"
+  },
+  {
+    "text": "كتبت رسالة قصيرة إلى صديقها.",
+    "language": "Arabic"
+  },
+  {
+    "text": "انتهى الكمبيوتر من معالجة الملف.",
+    "language": "Arabic"
+  },
+  {
+    "text": "Bonjour, comment allez-vous aujourd'hui ?",
+    "language": "French"
+  },
+  {
+    "text": "Il fait très beau ce matin.",
+    "language": "French"
+  },
+  {
+    "text": "J'apprends un nouveau langage de programmation.",
+    "language": "French"
+  },
+  {
+    "text": "L'ingénierie logicielle exige une résolution attentive des problèmes.",
+    "language": "French"
+  },
+  {
+    "text": "Ce projet détecte la langue d'un texte.",
+    "language": "French"
+  },
+  {
+    "text": "L'apprentissage automatique peut reconnaître des motifs dans les données.",
+    "language": "French"
+  },
+  {
+    "text": "Elle lit un livre avant de se coucher.",
+    "language": "French"
+  },
+  {
+    "text": "Nous développons une application avec le langage Rust.",
+    "language": "French"
+  },
+  {
+    "text": "Le train arrive à la gare à midi.",
+    "language": "French"
+  },
+  {
+    "text": "Veuillez m'envoyer le document demain.",
+    "language": "French"
+  },
+  {
+    "text": "La technologie change la manière dont les gens communiquent.",
+    "language": "French"
+  },
+  {
+    "text": "Les enfants jouent dehors dans le jardin.",
+    "language": "French"
+  },
+  {
+    "text": "Je voudrais une tasse de café, s'il vous plaît.",
+    "language": "French"
+  },
+  {
+    "text": "Aujourd'hui, nous étudions le traitement automatique des langues.",
+    "language": "French"
+  },
+  {
+    "text": "Le serveur stocke les informations dans une base de données.",
+    "language": "French"
+  },
+  {
+    "text": "Il travaille dans une petite entreprise de logiciels.",
+    "language": "French"
+  },
+  {
+    "text": "Pouvez-vous expliquer le fonctionnement de cet algorithme ?",
+    "language": "French"
+  },
+  {
+    "text": "La rivière traverse le centre de la ville.",
+    "language": "French"
+  },
+  {
+    "text": "Je vais généralement au travail à pied quand il fait beau.",
+    "language": "French"
+  },
+  {
+    "text": "Apprendre chaque jour aide à améliorer ses compétences.",
+    "language": "French"
+  },
+  {
+    "text": "Veuillez fermer la fenêtre avant de partir.",
+    "language": "French"
+  },
+  {
+    "text": "La réunion commencera dans quinze minutes.",
+    "language": "French"
+  },
+  {
+    "text": "La musique rend le long voyage plus agréable.",
+    "language": "French"
+  },
+  {
+    "text": "Nous avons besoin de plus d'exemples pour entraîner le classificateur.",
+    "language": "French"
+  },
+  {
+    "text": "Le français utilise l'alphabet latin.",
+    "language": "French"
+  },
+  {
+    "text": "Pouvez-vous m'aider à trouver la bibliothèque la plus proche ?",
+    "language": "French"
+  },
+  {
+    "text": "L'application fonctionne localement sans connexion Internet.",
+    "language": "French"
+  },
+  {
+    "text": "Une évaluation précise nécessite des données d'entraînement et de test distinctes.",
+    "language": "French"
+  },
+  {
+    "text": "Elle a écrit un court message à son amie.",
+    "language": "French"
+  },
+  {
+    "text": "L'ordinateur a terminé le traitement du fichier.",
+    "language": "French"
+  },
+  {
+    "text": "Hallo, wie geht es dir heute?",
+    "language": "German"
+  },
+  {
+    "text": "Das Wetter ist an diesem Morgen sehr schön.",
+    "language": "German"
+  },
+  {
+    "text": "Ich lerne eine neue Programmiersprache.",
+    "language": "German"
+  },
+  {
+    "text": "Softwareentwicklung erfordert sorgfältige Problemlösung.",
+    "language": "German"
+  },
+  {
+    "text": "Dieses Projekt erkennt die Sprache eines Textes.",
+    "language": "German"
+  },
+  {
+    "text": "Maschinelles Lernen kann Muster in Daten erkennen.",
+    "language": "German"
+  },
+  {
+    "text": "Sie liest vor dem Schlafengehen ein Buch.",
+    "language": "German"
+  },
+  {
+    "text": "Wir entwickeln eine Anwendung mit der Sprache Rust.",
+    "language": "German"
+  },
+  {
+    "text": "Der Zug kommt um zwölf Uhr am Bahnhof an.",
+    "language": "German"
+  },
+  {
+    "text": "Bitte schicke mir das Dokument morgen.",
+    "language": "German"
+  },
+  {
+    "text": "Technologie verändert die Art, wie Menschen kommunizieren.",
+    "language": "German"
+  },
+  {
+    "text": "Die Kinder spielen draußen im Garten.",
+    "language": "German"
+  },
+  {
+    "text": "Ich hätte gerne eine Tasse Kaffee, bitte.",
+    "language": "German"
+  },
+  {
+    "text": "Heute lernen wir die Verarbeitung natürlicher Sprache.",
+    "language": "German"
+  },
+  {
+    "text": "Der Server speichert Informationen in einer Datenbank.",
+    "language": "German"
+  },
+  {
+    "text": "Er arbeitet bei einem kleinen Softwareunternehmen.",
+    "language": "German"
+  },
+  {
+    "text": "Kannst du erklären, wie dieser Algorithmus funktioniert?",
+    "language": "German"
+  },
+  {
+    "text": "Der Fluss fließt durch das Stadtzentrum.",
+    "language": "German"
+  },
+  {
+    "text": "Bei gutem Wetter gehe ich normalerweise zu Fuß zur Arbeit.",
+    "language": "German"
+  },
+  {
+    "text": "Tägliches Lernen hilft dabei, Fähigkeiten zu verbessern.",
+    "language": "German"
+  },
+  {
+    "text": "Bitte schließe das Fenster, bevor du gehst.",
+    "language": "German"
+  },
+  {
+    "text": "Das Treffen beginnt in fünfzehn Minuten.",
+    "language": "German"
+  },
+  {
+    "text": "Musik macht die lange Reise angenehmer.",
+    "language": "German"
+  },
+  {
+    "text": "Wir brauchen mehr Beispiele, um den Klassifikator zu trainieren.",
+    "language": "German"
+  },
+  {
+    "text": "Deutsch verwendet das lateinische Alphabet.",
+    "language": "German"
+  },
+  {
+    "text": "Kannst du mir helfen, die nächste Bibliothek zu finden?",
+    "language": "German"
+  },
+  {
+    "text": "Die Anwendung läuft lokal ohne Internetverbindung.",
+    "language": "German"
+  },
+  {
+    "text": "Eine genaue Bewertung benötigt getrennte Trainings- und Testdaten.",
+    "language": "German"
+  },
+  {
+    "text": "Sie schrieb ihrer Freundin eine kurze Nachricht.",
+    "language": "German"
+  },
+  {
+    "text": "Der Computer hat die Datei verarbeitet.",
+    "language": "German"
+  },
+  {
+    "text": "Hola, ¿cómo estás hoy?",
+    "language": "Spanish"
+  },
+  {
+    "text": "El clima es muy agradable esta mañana.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Estoy aprendiendo un nuevo lenguaje de programación.",
+    "language": "Spanish"
+  },
+  {
+    "text": "La ingeniería de software requiere resolver problemas con cuidado.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Este proyecto detecta el idioma de un texto.",
+    "language": "Spanish"
+  },
+  {
+    "text": "El aprendizaje automático puede reconocer patrones en los datos.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Ella lee un libro antes de dormir.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Estamos desarrollando una aplicación con el lenguaje Rust.",
+    "language": "Spanish"
+  },
+  {
+    "text": "El tren llega a la estación al mediodía.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Por favor, envíame el documento mañana.",
+    "language": "Spanish"
+  },
+  {
+    "text": "La tecnología cambia la forma en que las personas se comunican.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Los niños están jugando afuera en el jardín.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Quisiera una taza de café, por favor.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Hoy estudiamos el procesamiento del lenguaje natural.",
+    "language": "Spanish"
+  },
+  {
+    "text": "El servidor guarda la información en una base de datos.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Él trabaja en una pequeña empresa de software.",
+    "language": "Spanish"
+  },
+  {
+    "text": "¿Puedes explicar cómo funciona este algoritmo?",
+    "language": "Spanish"
+  },
+  {
+    "text": "El río atraviesa el centro de la ciudad.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Normalmente camino al trabajo cuando hace buen tiempo.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Aprender todos los días ayuda a mejorar tus habilidades.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Por favor, cierra la ventana antes de salir.",
+    "language": "Spanish"
+  },
+  {
+    "text": "La reunión comenzará dentro de quince minutos.",
+    "language": "Spanish"
+  },
+  {
+    "text": "La música hace que el viaje largo sea más agradable.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Necesitamos más ejemplos para entrenar el clasificador.",
+    "language": "Spanish"
+  },
+  {
+    "text": "El español utiliza el alfabeto latino.",
+    "language": "Spanish"
+  },
+  {
+    "text": "¿Puedes ayudarme a encontrar la biblioteca más cercana?",
+    "language": "Spanish"
+  },
+  {
+    "text": "La aplicación funciona localmente sin conexión a Internet.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Una evaluación precisa requiere datos de entrenamiento y prueba separados.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Ella escribió un mensaje corto a su amiga.",
+    "language": "Spanish"
+  },
+  {
+    "text": "El ordenador terminó de procesar el archivo.",
+    "language": "Spanish"
+  },
+  {
+    "text": "Привет, как ты сегодня?",
+    "language": "Russian"
+  },
+  {
+    "text": "Сегодня утром очень хорошая погода.",
+    "language": "Russian"
+  },
+  {
+    "text": "Я изучаю новый язык программирования.",
+    "language": "Russian"
+  },
+  {
+    "text": "Разработка программного обеспечения требует внимательного решения задач.",
+    "language": "Russian"
+  },
+  {
+    "text": "Этот проект определяет язык текста.",
+    "language": "Russian"
+  },
+  {
+    "text": "Машинное обучение может находить закономерности в данных.",
+    "language": "Russian"
+  },
+  {
+    "text": "Она читает книгу перед сном.",
+    "language": "Russian"
+  },
+  {
+    "text": "Мы создаем приложение на языке Rust.",
+    "language": "Russian"
+  },
+  {
+    "text": "Поезд прибывает на станцию в полдень.",
+    "language": "Russian"
+  },
+  {
+    "text": "Пожалуйста, отправь мне документ завтра.",
+    "language": "Russian"
+  },
+  {
+    "text": "Технологии меняют способы общения людей.",
+    "language": "Russian"
+  },
+  {
+    "text": "Дети играют на улице в саду.",
+    "language": "Russian"
+  },
+  {
+    "text": "Мне, пожалуйста, чашку кофе.",
+    "language": "Russian"
+  },
+  {
+    "text": "Сегодня мы изучаем обработку естественного языка.",
+    "language": "Russian"
+  },
+  {
+    "text": "Сервер хранит информацию в базе данных.",
+    "language": "Russian"
+  },
+  {
+    "text": "Он работает в небольшой компании по разработке программного обеспечения.",
+    "language": "Russian"
+  },
+  {
+    "text": "Можешь объяснить, как работает этот алгоритм?",
+    "language": "Russian"
+  },
+  {
+    "text": "Река протекает через центр города.",
+    "language": "Russian"
+  },
+  {
+    "text": "В хорошую погоду я обычно хожу на работу пешком.",
+    "language": "Russian"
+  },
+  {
+    "text": "Ежедневное обучение помогает улучшать навыки.",
+    "language": "Russian"
+  },
+  {
+    "text": "Пожалуйста, закрой окно перед уходом.",
+    "language": "Russian"
+  },
+  {
+    "text": "Встреча начнется через пятнадцать минут.",
+    "language": "Russian"
+  },
+  {
+    "text": "Музыка делает долгое путешествие приятнее.",
+    "language": "Russian"
+  },
+  {
+    "text": "Нам нужно больше примеров для обучения классификатора.",
+    "language": "Russian"
+  },
+  {
+    "text": "Русский язык использует кириллицу.",
+    "language": "Russian"
+  },
+  {
+    "text": "Поможешь найти ближайшую библиотеку?",
+    "language": "Russian"
+  },
+  {
+    "text": "Приложение работает локально без подключения к интернету.",
+    "language": "Russian"
+  },
+  {
+    "text": "Для точной оценки нужны отдельные обучающие и тестовые данные.",
+    "language": "Russian"
+  },
+  {
+    "text": "Она написала короткое сообщение своей подруге.",
+    "language": "Russian"
+  },
+  {
+    "text": "Компьютер закончил обработку файла.",
+    "language": "Russian"
+  },
+  {
+    "text": "こんにちは、今日はお元気ですか？",
+    "language": "Japanese"
+  },
+  {
+    "text": "今朝はとてもいい天気です。",
+    "language": "Japanese"
+  },
+  {
+    "text": "新しいプログラミング言語を学んでいます。",
+    "language": "Japanese"
+  },
+  {
+    "text": "ソフトウェア開発には慎重な問題解決が必要です。",
+    "language": "Japanese"
+  },
+  {
+    "text": "このプロジェクトは文章の言語を検出します。",
+    "language": "Japanese"
+  },
+  {
+    "text": "機械学習はデータのパターンを認識できます。",
+    "language": "Japanese"
+  },
+  {
+    "text": "彼女は寝る前に本を読みます。",
+    "language": "Japanese"
+  },
+  {
+    "text": "Rustを使ってアプリケーションを開発しています。",
+    "language": "Japanese"
+  },
+  {
+    "text": "電車は正午に駅に到着します。",
+    "language": "Japanese"
+  },
+  {
+    "text": "明日その書類を送ってください。",
+    "language": "Japanese"
+  },
+  {
+    "text": "テクノロジーは人々のコミュニケーション方法を変えます。",
+    "language": "Japanese"
+  },
+  {
+    "text": "子供たちは庭の外で遊んでいます。",
+    "language": "Japanese"
+  },
+  {
+    "text": "コーヒーを一杯お願いします。",
+    "language": "Japanese"
+  },
+  {
+    "text": "今日は自然言語処理を勉強します。",
+    "language": "Japanese"
+  },
+  {
+    "text": "サーバーはデータベースに情報を保存します。",
+    "language": "Japanese"
+  },
+  {
+    "text": "彼は小さなソフトウェア会社で働いています。",
+    "language": "Japanese"
+  },
+  {
+    "text": "このアルゴリズムの仕組みを説明できますか？",
+    "language": "Japanese"
+  },
+  {
+    "text": "川は街の中心部を流れています。",
+    "language": "Japanese"
+  },
+  {
+    "text": "天気が良ければ、普段は歩いて仕事に行きます。",
+    "language": "Japanese"
+  },
+  {
+    "text": "毎日学ぶことでスキルを向上させることができます。",
+    "language": "Japanese"
+  },
+  {
+    "text": "出かける前に窓を閉めてください。",
+    "language": "Japanese"
+  },
+  {
+    "text": "会議は十五分後に始まります。",
+    "language": "Japanese"
+  },
+  {
+    "text": "音楽は長い旅をより楽しくします。",
+    "language": "Japanese"
+  },
+  {
+    "text": "分類器を学習させるには、もっと例が必要です。",
+    "language": "Japanese"
+  },
+  {
+    "text": "日本語では漢字、ひらがな、カタカナを使います。",
+    "language": "Japanese"
+  },
+  {
+    "text": "一番近い図書館を探すのを手伝ってくれますか？",
+    "language": "Japanese"
+  },
+  {
+    "text": "このアプリケーションはインターネット接続なしで動作します。",
+    "language": "Japanese"
+  },
+  {
+    "text": "正確な評価には学習データとテストデータを分ける必要があります。",
+    "language": "Japanese"
+  },
+  {
+    "text": "彼女は友達に短いメッセージを書きました。",
+    "language": "Japanese"
+  },
+  {
+    "text": "コンピューターはファイルの処理を終えました。",
+    "language": "Japanese"
+  }
+]
