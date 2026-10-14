@@ -1,0 +1,18 @@
+# Rust build output
+/target/
+
+# rustfmt backup files
+**/*.rs.bk
+
+# Cargo.lock: commit this for binaries/applications.
+# For libraries, it's optional; many ignore it.
+# Cargo.lock
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db

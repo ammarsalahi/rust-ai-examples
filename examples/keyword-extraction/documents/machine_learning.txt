@@ -1,0 +1,6 @@
+Machine learning is a branch of artificial intelligence.
+Machine learning algorithms learn patterns from training data.
+Deep learning uses neural networks to solve complex problems.
+Artificial intelligence includes machine learning and deep learning.
+Neural networks are useful for image classification and natural language processing.
+Machine learning models can classify images, recognize speech, and predict outcomes.

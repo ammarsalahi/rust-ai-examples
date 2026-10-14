@@ -1,0 +1,6 @@
+Cybersecurity protects computer systems, networks, and sensitive information.
+Network security helps prevent unauthorized access to computer systems.
+Encryption protects sensitive information from unauthorized users.
+Security engineers analyze vulnerabilities and develop security solutions.
+Application security includes authentication, authorization, and secure coding.
+Cybersecurity teams monitor networks and investigate security incidents.

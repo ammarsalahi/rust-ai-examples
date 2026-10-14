@@ -1,0 +1,246 @@
+use regex::Regex;
+use rust_stemmers::{Algorithm, Stemmer};
+
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io;
+use std::path::Path;
+
+const TOP_KEYWORDS: usize = 10;
+const TOP_PHRASES: usize = 10;
+
+const STOP_WORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "is", "are", "was", "were", "be", "been", "being", "to",
+    "of", "in", "on", "at", "for", "from", "by", "with", "about", "as", "into", "through",
+    "during", "before", "after", "above", "below", "between", "under", "over", "out", "up", "down",
+    "off", "again", "further", "then", "once", "here", "there", "when", "where", "why", "how",
+    "all", "any", "both", "each", "few", "more", "most", "other", "some", "such", "no", "nor",
+    "not", "only", "own", "same", "so", "than", "too", "very", "can", "will", "just", "should",
+    "now", "do", "does", "did", "doing", "have", "has", "had", "having", "i", "me", "my", "myself",
+    "we", "our", "ours", "you", "your", "he", "she", "it", "they", "them", "their", "this", "that",
+    "these", "those", "what", "which", "who", "whom", "if", "because", "while", "until", "am",
+    "also", "get", "gets", "got",
+];
+
+struct Document {
+    name: String,
+    tokens: Vec<String>,
+    stems: Vec<String>,
+}
+
+struct RankedItem {
+    text: String,
+    score: f64,
+}
+
+fn main() -> io::Result<()> {
+    let directory = Path::new("documents");
+    fs::create_dir_all(directory)?;
+
+    let tokenizer = Regex::new(r"[A-Za-z]+(?:'[A-Za-z]+)?").expect("Invalid regex");
+
+    let stemmer = Stemmer::create(Algorithm::English);
+
+    let mut paths: Vec<_> = fs::read_dir(directory)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
+        })
+        .collect();
+
+    paths.sort();
+
+    if paths.is_empty() {
+        println!("No .txt files found in the documents directory.");
+        println!("Add text files to ./documents/ and run cargo run.");
+        return Ok(());
+    }
+
+    let mut documents = Vec::new();
+
+    for path in paths {
+        let content = fs::read_to_string(&path)?;
+
+        let mut tokens = Vec::new();
+        let mut stems = Vec::new();
+
+        for matched in tokenizer.find_iter(&content) {
+            let word = matched.as_str().to_lowercase();
+
+            if word.len() < 2 || STOP_WORDS.contains(&word.as_str()) {
+                continue;
+            }
+
+            stems.push(stemmer.stem(&word).to_string());
+            tokens.push(word);
+        }
+
+        if !tokens.is_empty() {
+            documents.push(Document {
+                name: path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+                tokens,
+                stems,
+            });
+        }
+    }
+
+    if documents.is_empty() {
+        println!("No usable English words found.");
+        return Ok(());
+    }
+
+    // Count how many documents contain each term.
+    let mut document_frequency: HashMap<String, usize> = HashMap::new();
+
+    for document in &documents {
+        let unique_stems: HashSet<&String> = document.stems.iter().collect();
+
+        for stem in unique_stems {
+            *document_frequency.entry(stem.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let total_documents = documents.len() as f64;
+
+    println!("======================================");
+    println!("       RUST KEYWORD EXTRACTION");
+    println!("======================================");
+    println!("Documents analyzed: {}", documents.len());
+
+    for document in &documents {
+        println!("\n======================================");
+        println!("Document: {}", document.name);
+        println!("======================================");
+
+        let total_terms = document.stems.len() as f64;
+
+        let mut term_frequency: HashMap<String, usize> = HashMap::new();
+
+        for stem in &document.stems {
+            *term_frequency.entry(stem.clone()).or_insert(0) += 1;
+        }
+
+        // Calculate TF-IDF scores.
+        let mut word_scores: HashMap<String, f64> = HashMap::new();
+
+        for (stem, count) in &term_frequency {
+            let tf = *count as f64 / total_terms;
+
+            let df = *document_frequency.get(stem).unwrap_or(&0) as f64;
+
+            let idf = ((total_documents + 1.0) / (df + 1.0)).ln() + 1.0;
+
+            word_scores.insert(stem.clone(), tf * idf);
+        }
+
+        // Recover the most frequent original spelling for each stem.
+        let mut original_counts: HashMap<String, HashMap<String, usize>> = HashMap::new();
+
+        for (word, stem) in document.tokens.iter().zip(&document.stems) {
+            *original_counts
+                .entry(stem.clone())
+                .or_default()
+                .entry(word.clone())
+                .or_insert(0) += 1;
+        }
+
+        let mut keywords: Vec<RankedItem> = word_scores
+            .iter()
+            .map(|(stem, score)| {
+                let word = original_counts
+                    .get(stem)
+                    .and_then(|counts| counts.iter().max_by_key(|(_, count)| *count))
+                    .map(|(word, _)| word.clone())
+                    .unwrap_or_else(|| stem.clone());
+
+                RankedItem {
+                    text: word,
+                    score: *score,
+                }
+            })
+            .collect();
+
+        keywords.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.text.cmp(&b.text))
+        });
+
+        println!("\nTop Keywords:");
+
+        for (index, item) in keywords.iter().take(TOP_KEYWORDS).enumerate() {
+            println!("{:>2}. {:<30} {:.4}", index + 1, item.text, item.score);
+        }
+
+        // Generate candidate phrases of two and three words.
+        let mut phrase_counts: HashMap<String, usize> = HashMap::new();
+        let mut phrase_stems: HashMap<String, Vec<String>> = HashMap::new();
+
+        for size in 2..=3 {
+            if document.tokens.len() < size {
+                continue;
+            }
+
+            for start in 0..=(document.tokens.len() - size) {
+                let phrase = document.tokens[start..start + size].join(" ");
+                let stems = document.stems[start..start + size].to_vec();
+
+                *phrase_counts.entry(phrase.clone()).or_insert(0) += 1;
+                phrase_stems.entry(phrase).or_insert(stems);
+            }
+        }
+
+        let mut phrases = Vec::new();
+
+        for (phrase, count) in &phrase_counts {
+            let Some(stems) = phrase_stems.get(phrase) else {
+                continue;
+            };
+
+            let average_score = stems
+                .iter()
+                .map(|stem| word_scores.get(stem).copied().unwrap_or(0.0))
+                .sum::<f64>()
+                / stems.len() as f64;
+
+            let phrase_frequency = *count as f64 / total_terms;
+
+            let score = average_score * (1.0 + phrase_frequency.ln_1p());
+
+            phrases.push(RankedItem {
+                text: phrase.clone(),
+                score,
+            });
+        }
+
+        phrases.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.text.cmp(&b.text))
+        });
+
+        println!("\nTop Keyphrases:");
+
+        if phrases.is_empty() {
+            println!("No phrases found.");
+        }
+
+        for (index, item) in phrases.iter().take(TOP_PHRASES).enumerate() {
+            println!("{:>2}. {:<40} {:.4}", index + 1, item.text, item.score);
+        }
+    }
+
+    println!("\nKeyword extraction completed.");
+
+    Ok(())
+}
+

@@ -1,0 +1,5 @@
+Rust is a systems programming language focused on memory safety.
+Rust provides memory safety without requiring a garbage collector.
+The Rust programming language supports concurrency and performance.
+Developers use Rust to build backend services, command line tools, and systems software.
+Rust applications can provide high performance and reliable software.
