@@ -278,8 +278,8 @@ fn main() -> Result<()> {
     let r2 = calculate_r2(&y_test, &predictions);
 
     println!("============== Evaluation ==============");
-    println!("MAE:  ${mae:,.2}");
-    println!("RMSE: ${rmse:,.2}");
+    println!("MAE:  ${mae:.2}");
+    println!("RMSE: ${rmse:.2}");
     println!("R²:   {r2:.4}");
     println!("========================================\n");
 
@@ -316,7 +316,7 @@ fn main() -> Result<()> {
     println!("Age:           {:.0} years", example[3]);
     println!("Distance:      {:.0} km", example[4]);
     println!("--------------------------------------------");
-    println!("Estimated price: ${estimated_price:,.2}");
+    println!("Estimated price: ${estimated_price:.2}");
     println!("============================================");
 
     Ok(())

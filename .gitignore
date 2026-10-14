@@ -1,0 +1,14 @@
+# Ignore todo.md
+todo.md
+
+# Rust target directories
+**/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
