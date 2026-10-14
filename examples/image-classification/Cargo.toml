@@ -1,0 +1,13 @@
+[package]
+name = "image-classification"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+candle-core = "0.9"
+candle-nn = "0.9"
+candle-transformers = "0.9"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls"] }
+serde_json = "1"
