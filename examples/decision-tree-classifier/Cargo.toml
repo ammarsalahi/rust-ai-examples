@@ -1,0 +1,13 @@
+[package]
+name = "decision-tree-classifier"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+csv = "1"
+linfa = "0.8.1"
+linfa-trees = "0.8.1"
+ndarray = "0.16"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
