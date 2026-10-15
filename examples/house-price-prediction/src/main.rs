@@ -10,7 +10,7 @@ use serde::Deserialize;
 use std::fs::File;
 use std::path::Path;
 
-const DATASET_PATH: &str = "data/houses.csv";
+const DATASET_PATH: &str = "data/house.csv";
 const FEATURE_COUNT: usize = 5;
 const TRAIN_RATIO: f64 = 0.8;
 
