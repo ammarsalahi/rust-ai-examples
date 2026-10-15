@@ -1,0 +1,1005 @@
+---
+title: طبقه‌بندی متن
+description: تنظیم دقیق یک دسته‌بند خطی روی تعبیه‌های ثابت BERT با Candle، crate به نام tokenizers و یک مدل محلی
+---
+
+# طبقه‌بندی متن
+
+## مرور کلی
+
+این نمونه یک **دسته‌بند متن چندکلاسه** روی یک رمزگذار BERT می‌سازد. به‌جای
+دانلود یک مدل از پیش آموزش‌دیده از Hub، یک چک‌پوینت **محلی** BERT را از دیسک
+بارگذاری می‌کند (`models/config.json`، `models/model.safetensors`، `models/vocab.txt`).
+
+گردش کار یک خط لوله یادگیری انتقالی *استخراج ویژگی + کاوش خطی* است:
+
+1. ساخت یک توکنایزر WordPiece در کد از `vocab.txt`.
+2. اجرای هر جمله از طریق رمزگذار ثابت BERT و برداشتن بردار `[CLS]` به‌عنوان یک
+   تعبیه جمله با اندازه ثابت.
+3. آموزش یک لایه `Linear` واحد (`hidden_size -> num_classes`) روی آن تعبیه‌ها با
+   AdamW و تابع زیان آنتروپی متقاطع.
+4. ذخیره سر آموزش‌دیده در `models/classifier_h{hidden}_c{classes}.safetensors`.
+5. ورود به یک حلقه تعاملی که متن جدید را طبقه‌بندی می‌کند.
+
+از آنجا که وزن‌های BERT هرگز تغییر نمی‌کنند، آموزش سریع است و تنها تعداد بسیار کمی
+پارامتر یاد گرفته می‌شود. این همان روش کلاسیک «کاوش خطی» برای استفاده مجدد از یک
+رمزگذار از پیش آموزش‌دیده است.
+
+## کد منبع
+
+[examples/text-classification/src/main.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/text-classification/src/main.rs)
+
+## ساختار نمونه
+
+```text
+examples/text-classification/
+├── Cargo.toml                          # Dependencies
+├── src/
+│   └── main.rs                         # Entire pipeline (1008 lines)
+├── data/
+│   └── dataset.csv                     # Training data: text,label
+└── models/
+    ├── config.json                     # BERT architecture (hidden_size 128)
+    ├── model.safetensors               # BERT encoder weights
+    └── vocab.txt                       # WordPiece vocabulary (30522 tokens)
+```
+
+| مسیر | نقش |
+|------|------|
+| `Cargo.toml` | نام crate با `text-classification` و وابستگی‌های آن |
+| `src/main.rs` | همه‌چیز: بررسی فایل‌ها، بارگذاری مجموعه‌داده، توکنایزر، رمزگذار، آموزش، CLI |
+| `data/dataset.csv` | نمونه‌های برچسب‌دار، سطر سرصفحه `text,label` |
+| `models/config.json` | ابرپارامترهای BERT که توسط `BertConfig` خوانده می‌شوند |
+| `models/model.safetensors` | وزن‌های رمزگذار BERT نگاشت‌شده در حافظه |
+| `models/vocab.txt` | یک توکن در هر خط؛ برای ساخت توکنایزر WordPiece استفاده می‌شود |
+| `models/classifier_h*_c*.safetensors` | پس از نخستین اجرای آموزش **تولید می‌شود** |
+
+:::note
+فایل دسته‌بند آموزش‌دیده توسط خود برنامه ساخته می‌شود. حذف آن باعث می‌شود در
+اجرای بعدی `cargo run` یک آموزش تازه انجام شود.
+:::
+
+## وابستگی‌ها
+
+| Crate | نسخه | هدف |
+|-------|---------|---------|
+| `anyhow` | 1 | انتشار خطای ارگونومیک (`Result`، `Context`) |
+| `candle-core` | 0.9 | تنسورها، `Device`، `DType` |
+| `candle-nn` | 0.9 | `Linear`، `Module`، `AdamW`، `VarMap`، `cross_entropy`، `softmax` |
+| `candle-transformers` | 0.9 | تعریف مدل‌های `resnet`/`bert`، اینجا `BertModel` |
+| `csv` | 1 | خواندن `dataset.csv` |
+| `rand` | 0.9 | برهم‌زدن در طول تقسیم طبقه‌ای و در هر دوره |
+| `serde` | 1 | استخراج `Deserialize` برای سطرهای CSV |
+| `serde_json` | 1 | تجزیه `config.json` |
+| `tokenizers` | 0.21 | ساخت توکنایزر WordPiece، برش و لایه‌گذاری |
+
+## فایل‌های داده و مدل
+
+### `data/dataset.csv`
+
+یک سطر سرصفحه و پس از آن یک نمونه در هر خط. برچسب‌ها رشته‌های دلخواه هستند؛ برنامه
+مجموعه یکتا را به‌صورت خودکار کشف می‌کند.
+
+```csv
+text,label
+Rust is a systems programming language,programming
+Python is used for software development,programming
+The developer created a REST API,programming
+```
+
+### `models/config.json`
+
+BERT محلی یک مدل کوچک است. برنامه این مقادیر را در زمان راه‌اندازی چاپ می‌کند و
+`hidden_size` را از آن‌ها می‌خواند:
+
+```json
+{
+  "hidden_size": 128,
+  "intermediate_size": 512,
+  "max_position_embeddings": 512,
+  "num_attention_heads": 2,
+  "num_hidden_layers": 2,
+  "model_type": "bert",
+  "vocab_size": 30522
+}
+```
+
+### `models/vocab.txt`
+
+یک فایل متنی ساده با یک توکن در هر خط (واژگان استاندارد BERT شامل `[PAD]`، `[UNK]`،
+`[CLS]`، `[SEP]`، ...). باید `30522` ورودی داشته باشد تا با `vocab_size` مطابقت کند.
+
+---
+
+## مرور گام‌به‌گام کد (خط به خط)
+
+### 1. واردکردن‌ها (خطوط 1-19)
+
+```rust
+use anyhow::{Context, Result, anyhow};
+use candle_core::{DType, Device, Tensor};
+use candle_nn::{
+    AdamW, Linear, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap, linear, loss::cross_entropy,
+};
+use candle_transformers::models::bert::{BertModel, Config as BertConfig};
+use rand::seq::SliceRandom;
+use serde::Deserialize;
+use std::{
+    collections::BTreeSet,
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
+use tokenizers::{
+    PaddingParams, PaddingStrategy, Tokenizer, TruncationParams, models::wordpiece::WordPiece,
+    normalizers::BertNormalizer, pre_tokenizers::bert::BertPreTokenizer,
+    processors::template::TemplateProcessing,
+};
+```
+
+- **اجزای Candle NN** — `AdamW` و `Optimizer` آموزش را هدایت می‌کنند؛ `Linear` و `Module`
+  سر را می‌سازند و اجرا می‌کنند؛ `VarMap`/`VarBuilder` به سر پارامترهای نام‌دار مخصوص
+  خودش را می‌دهند؛ `cross_entropy` تابع زیان است؛ `linear` یک کمک‌تابع است که یک
+  لایه `Linear` می‌سازد.
+- **`BertConfig`** به‌صورت یک نام مستعار وارد می‌شود تا با هیچ چیز دیگری تعارض نداشته باشد.
+- **بلوک‌های سازنده `tokenizers`** — `WordPiece`، `BertNormalizer`، `BertPreTokenizer`،
+  `TemplateProcessing`، `TruncationParams`، `PaddingParams` به‌صورت دستی در
+  `build_tokenizer` سرهم می‌شوند، به‌جای بارگذاری یک `tokenizer.json`.
+- **`rand::seq::SliceRandom`** تابع `shuffle` را برای `Vec` فراهم می‌کند.
+
+### 2. مسیرهای ثابت (خطوط 21-31)
+
+```rust
+const DATASET_PATH: &str = "data/dataset.csv";
+
+const CONFIG_PATH: &str = "models/config.json";
+const WEIGHTS_PATH: &str = "models/model.safetensors";
+const VOCAB_PATH: &str = "models/vocab.txt";
+
+const MODELS_DIR: &str = "models";
+```
+
+- همه ورودی‌ها مسیرهای نسبی سخت‌کدشده هستند، بنابراین نمونه باید از
+  `examples/text-classification/` اجرا شود.
+- `MODELS_DIR` همچنین پوشه‌ای است که سر آموزش‌دیده در آن نوشته می‌شود.
+
+### 3. پیکربندی آموزش (خطوط 33-43)
+
+```rust
+const MAX_LENGTH: usize = 64;
+
+const EPOCHS: usize = 10;
+
+const LEARNING_RATE: f64 = 0.001;
+
+const CONFIDENCE_THRESHOLD: f32 = 0.60;
+```
+
+- **`MAX_LENGTH = 64`** — هر ورودی دقیقاً به 64 توکن لایه‌گذاری/برش داده می‌شود. توکنایزر
+  با لایه‌گذاری *ثابت* به این طول پیکربندی شده است، بنابراین `encode_text` می‌تواند
+  اندازه دقیق را بررسی کند.
+- **`EPOCHS = 10`** — تعداد گذرهای کامل روی تعبیه‌های آموزشی.
+- **`LEARNING_RATE = 0.001`** — نرخ یادگیری AdamW.
+- **`CONFIDENCE_THRESHOLD = 0.60`** — پایین‌تر از این احتمال، حلقه تعاملی یک هشدار
+  اطمینان پایین چاپ می‌کند.
+
+### 4. انواع مجموعه‌داده (خطوط 45-69)
+
+```rust
+#[derive(Debug, Deserialize, Clone)]
+struct Sample {
+    text: String,
+    label: String,
+}
+
+#[derive(Debug, Clone)]
+struct LabeledSample {
+    text: String,
+    label: usize,
+}
+
+struct Dataset {
+    samples: Vec<LabeledSample>,
+    labels: Vec<String>,
+}
+
+struct DatasetSplit {
+    train: Vec<LabeledSample>,
+    validation: Vec<LabeledSample>,
+}
+```
+
+- **`Sample`** دقیقاً یک سطر CSV را بازتاب می‌دهد (`text`، `label`)، بنابراین `csv`
+  می‌تواند مستقیماً `deserialize` کند.
+- **`LabeledSample`** همان سطر است با این تفاوت که برچسب از قبل به یک شناسه عددی تبدیل شده است.
+- **`Dataset`** نمونه‌ها را به‌همراه فهرست مرتب نام‌های کلاس نگه می‌دارد (شاخص = شناسه کلاس).
+- **`DatasetSplit`** دو نیمه آموزش/اعتبارسنجی طبقه‌ای را نگه می‌دارد.
+
+### 5. مسیرهای فایل مدل (خطوط 71-80)
+
+```rust
+#[derive(Debug, Clone)]
+struct ModelFiles {
+    config: PathBuf,
+    vocab: PathBuf,
+    weights: PathBuf,
+}
+```
+
+یک بسته کوچک که سه مسیر مدل محلی را نگه می‌دارد، تا `load_encoder` تنها یک آرگومان دریافت کند.
+
+### 6. رمزگذار و دسته‌بند (خطوط 82-102)
+
+```rust
+struct Encoder {
+    model: BertModel,
+    tokenizer: Tokenizer,
+    device: Device,
+    hidden_size: usize,
+}
+
+struct Classifier {
+    linear: Linear,
+    varmap: VarMap,
+    hidden_size: usize,
+    num_classes: usize,
+}
+```
+
+- **`Encoder`** مدل ثابت BERT، توکنایزر آن، دستگاه و عرض تعبیه را در کنار هم نگه می‌دارد.
+  `hidden_size` کش می‌شود تا کد پایین‌تر مجبور نباشد پیکربندی را دوباره بخواند.
+- **`Classifier`** بخش قابل‌آموزش است. `VarMap` مالک وزن‌ها است تا بتوان آن‌ها را با
+  `.save()` / `.load()` ذخیره/بارگذاری کرد؛ `linear` همان لایه واقعی
+  `hidden_size -> num_classes` است.
+
+### 7. `main` (خطوط 108-271)
+
+```rust
+fn main() -> Result<()> {
+    fs::create_dir_all("data").context("failed to create data directory")?;
+
+    fs::create_dir_all(MODELS_DIR).context("failed to create models directory")?;
+```
+
+- در صورت نبود، `data/` و `models/` را می‌سازد تا نوشتن‌های بعدی هرگز بی‌دلیل شکست نخورند.
+
+```rust
+    check_required_file(DATASET_PATH)?;
+    check_required_file(CONFIG_PATH)?;
+    check_required_file(WEIGHTS_PATH)?;
+    check_required_file(VOCAB_PATH)?;
+```
+
+- در صورت نبود هر ورودی، زودتر با یک پیام واضح شکست می‌خورد.
+
+```rust
+    let dataset = load_dataset(dataset_path)?;
+
+    if dataset.samples.is_empty() {
+        return Err(anyhow!("dataset is empty"));
+    }
+
+    print_dataset_stats(&dataset);
+```
+
+- مجموعه‌داده را بارگذاری و اعتبارسنجی می‌کند، سپس توزیع کلاس‌ها را چاپ می‌کند.
+
+```rust
+    let device = Device::Cpu;
+```
+
+- استنتاج و آموزش روی CPU اجرا می‌شوند. `Device` یک دستگیره سبک است که درون `Encoder`
+  کلون می‌شود.
+
+```rust
+    let model_files = ModelFiles {
+        config: PathBuf::from(CONFIG_PATH),
+        vocab: PathBuf::from(VOCAB_PATH),
+        weights: PathBuf::from(WEIGHTS_PATH),
+    };
+
+    let encoder = load_encoder(&model_files, device.clone())?;
+```
+
+- پرکردن بسته مسیرها و ساخت رمزگذار ثابت.
+
+```rust
+    let split = stratified_split(&dataset.samples, 0.8);
+```
+
+- تقسیم ۸۰/۲۰ که توازن کلاس‌ها را حفظ می‌کند (پایین‌تر ببینید).
+
+```rust
+    let classifier_path = classifier_path(dataset.labels.len(), encoder.hidden_size);
+
+    let mut classifier = create_classifier(&device, encoder.hidden_size, dataset.labels.len())?;
+```
+
+- نام روی دیسک سر آموزش‌دیده را محاسبه می‌کند و یک سر تازه با مقداردهی تصادفی می‌سازد.
+  این کار همیشه انجام می‌شود؛ اگر سر ذخیره‌شده‌ای وجود داشته باشد، در ادامه روی وزن‌های
+  تازه بارگذاری می‌شود.
+
+```rust
+    if classifier_path.exists() {
+        classifier
+            .varmap
+            .load(&classifier_path)
+            .context("failed to load classifier")?;
+    } else {
+        let train_embeddings = encode_samples(&encoder, &split.train)?;
+        let validation_embeddings = encode_samples(&encoder, &split.validation)?;
+
+        train_classifier(&mut classifier, &train_embeddings, &validation_embeddings)?;
+
+        classifier
+            .varmap
+            .save(&classifier_path)
+            .context("failed to save classifier")?;
+    }
+```
+
+- **اگر سَری وجود دارد**، آن را بارگذاری کن و از آموزش صرف‌نظر کن.
+- **در غیر این صورت**: تقسیم‌های آموزش و اعتبارسنجی را به تعبیه‌های `[CLS]` رمزگذاری کن،
+  سر خطی را آموزش بده و آن را ذخیره کن. تعبیه‌ها یک‌بار محاسبه می‌شوند چون رمزگذار ثابت است.
+
+```rust
+    interactive_loop(&encoder, &classifier, &dataset.labels)?;
+
+    Ok(())
+}
+```
+
+- حلقه خواندن-ارزیابی-چاپ را برای طبقه‌بندی تعاملی آغاز می‌کند.
+
+### 8. `check_required_file` (خطوط 277-293)
+
+```rust
+fn check_required_file(path: &str) -> Result<()> {
+    let path = Path::new(path);
+
+    if !path.exists() {
+        return Err(anyhow!(
+            "required file not found: {}\n\
+             Please place the file at this path.",
+            path.display()
+        ));
+    }
+
+    if !path.is_file() {
+        return Err(anyhow!("path exists but is not a file: {}", path.display()));
+    }
+
+    Ok(())
+}
+```
+
+- بین «ناموجود» و «وجود دارد اما یک پوشه است» تفاوت می‌گذارد و یک پیام قابل‌اقدام تولید می‌کند.
+
+### 9. `load_dataset` (خطوط 299-368)
+
+```rust
+    let mut reader = csv::Reader::from_path(path)
+        .with_context(|| format!("failed to open dataset: {}", path.display()))?;
+
+    let mut raw_samples = Vec::<Sample>::new();
+
+    for result in reader.deserialize::<Sample>() {
+        let sample = result.context("failed to parse CSV row")?;
+
+        if sample.text.trim().is_empty() { continue; }
+        if sample.label.trim().is_empty() { continue; }
+
+        raw_samples.push(sample);
+    }
+```
+
+- هر سطر را در `Sample` می‌خواند و سطرهایی با متن یا برچسب خالی را بی‌صدا رد می‌کند.
+
+```rust
+    let unique_labels: BTreeSet<String> = raw_samples
+        .iter()
+        .map(|sample| sample.label.trim().to_string())
+        .collect();
+
+    let labels: Vec<String> = unique_labels.into_iter().collect();
+
+    if labels.len() < 2 {
+        return Err(anyhow!("dataset must contain at least 2 different labels"));
+    }
+```
+
+- `BTreeSet` یک ترتیب کلاس **قطعی و به‌صورت الفبایی مرتب** می‌دهد، که حیاتی است چون
+  شناسه‌های کلاس باید بین اجرای آموزش و اجراهای پیش‌بینی بعدی پایدار بمانند.
+
+```rust
+    for sample in raw_samples {
+        let label_name = sample.label.trim();
+
+        let label_id = labels
+            .iter()
+            .position(|label| label == label_name)
+            .ok_or_else(|| anyhow!("failed to map label `{}`", label_name))?;
+
+        samples.push(LabeledSample {
+            text: sample.text,
+            label: label_id,
+        });
+    }
+```
+
+- هر برچسب رشته‌ای را به شاخص آن در `labels` نگاشت می‌کند و `Dataset` نهایی را می‌سازد.
+
+### 10. `print_dataset_stats` (خطوط 374-392)
+
+```rust
+    let mut counts = vec![0usize; dataset.labels.len()];
+
+    for sample in &dataset.samples {
+        if sample.label < counts.len() {
+            counts[sample.label] += 1;
+        }
+    }
+```
+
+- هیستوگرام هر کلاس، که چاپ می‌شود تا به تشخیص مجموعه‌داده نامتوازن پیش از آموزش کمک کند.
+
+### 11. `load_encoder` (خطوط 398-444)
+
+```rust
+    let config_text = fs::read_to_string(&files.config).context("failed to read config.json")?;
+
+    let config: BertConfig =
+        serde_json::from_str(&config_text).context("failed to parse BERT config.json")?;
+```
+
+- توصیف معماری BERT را می‌خواند و تجزیه می‌کند.
+
+```rust
+    let tokenizer = build_tokenizer(&files.vocab)?;
+```
+
+- توکنایزر را می‌سازد (بخش بعدی را ببینید).
+
+```rust
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[&files.weights], DType::F32, &device) }
+        .context("failed to memory-map model.safetensors")?;
+
+    let model = BertModel::load(vb, &config).context("failed to load BERT model")?;
+```
+
+- `from_mmaped_safetensors` وزن‌ها را به‌جای کپی‌کردن در حافظه نگاشت می‌کند و مصرف RAM
+  را پایین نگه می‌دارد. این تابع `unsafe` است چون نگاشت حافظه نباید هم‌زمان تغییر داده
+  شود — اینجا ایمن است چون فایل فقط‌خواندنی است.
+- `BertModel::load` مقدار `VarBuilder` را مصرف می‌کند و رمزگذار را می‌سازد.
+- `Encoder` بازگشتی `config.hidden_size` (اینجا 128) را کش می‌کند.
+
+### 12. `build_tokenizer` (خطوط 450-509)
+
+```rust
+    let wordpiece = WordPiece::from_file(&vocab)
+        .unk_token("[UNK]".to_string())
+        .continuing_subword_prefix("##".to_string())
+        .build()
+        .map_err(|e| anyhow!("failed to build WordPiece tokenizer: {e}"))?;
+
+    let mut tokenizer = Tokenizer::new(wordpiece);
+```
+
+- مدل WordPiece را مستقیماً از `vocab.txt` می‌سازد و از `[UNK]` و `##` دقیقاً همان‌طور
+  که BERT استفاده می‌کند بهره می‌برد.
+
+```rust
+    let normalizer = BertNormalizer::new(true, true, Some(true), true);
+    tokenizer.with_normalizer(Some(normalizer));
+
+    tokenizer.with_pre_tokenizer(Some(BertPreTokenizer));
+```
+
+- آرگومان‌های **`BertNormalizer`**: `clean_text`، `handle_chinese_chars`،
+  `strip_accents = Some(true)`، `lowercase = true`. این‌ها گام‌های استاندارد
+  یکه‌سازی متن در BERT هستند.
+- **`BertPreTokenizer`** بر اساس فضای خالی و نشانه‌گذاری تقسیم می‌کند.
+
+```rust
+    let processor = TemplateProcessing::builder()
+        .try_single("[CLS] $A [SEP]")
+        .map_err(|e| anyhow!("failed to configure tokenizer template: {e}"))?
+        .special_tokens(vec![("[CLS]".to_string(), 101), ("[SEP]".to_string(), 102)])
+        .build()
+        .map_err(|e| anyhow!("failed to build tokenizer processor: {e}"))?;
+
+    tokenizer.with_post_processor(Some(processor));
+```
+
+- هر دنباله را به‌صورت `[CLS] tokens [SEP]` می‌پیچد و شناسه‌های استاندارد BERT یعنی
+  101/102 را تخصیص می‌دهد.
+
+```rust
+    tokenizer
+        .with_truncation(Some(TruncationParams {
+            max_length: MAX_LENGTH,
+            ..Default::default()
+        }))?;
+
+    tokenizer.with_padding(Some(PaddingParams {
+        strategy: PaddingStrategy::Fixed(MAX_LENGTH),
+        ..Default::default()
+    }));
+```
+
+- **برش** تا `MAX_LENGTH = 64`.
+- **لایه‌گذاری ثابت** دقیقاً تا 64 توکن. این امر در ترکیب با بررسی طول در `encode_text`،
+  تضمین می‌کند که برای هر نمونه یک تنسور ورودی `[1, 64]` داشته باشیم.
+
+### 13. `stratified_split` (خطوط 515-549)
+
+```rust
+    let max_label = samples.iter().map(|sample| sample.label).max().unwrap_or(0);
+
+    let mut groups: Vec<Vec<LabeledSample>> = (0..=max_label).map(|_| Vec::new()).collect();
+
+    for sample in samples {
+        groups[sample.label].push(sample.clone());
+    }
+```
+
+- نمونه‌ها را بر اساس کلاس دسته‌بندی می‌کند تا هر کلاس بتواند مستقل تقسیم شود.
+
+```rust
+    let mut rng = rand::rng();
+
+    for group in &mut groups {
+        group.shuffle(&mut rng);
+
+        let mut train_size = ((group.len() as f32) * train_ratio).round() as usize;
+
+        if group.len() > 1 {
+            train_size = train_size.max(1).min(group.len() - 1);
+        } else {
+            train_size = group.len();
+        }
+
+        train.extend_from_slice(&group[..train_size]);
+        validation.extend_from_slice(&group[train_size..]);
+    }
+
+    train.shuffle(&mut rng);
+    validation.shuffle(&mut rng);
+```
+
+- هر گروه کلاس را برهم می‌زند، سپس `train_ratio` از آن را به آموزش تخصیص می‌دهد.
+- محافظ `max(1).min(len - 1)` تضمین می‌کند تا زمانی که یک کلاس دو عضو یا بیشتر داشته
+  باشد، دست‌کم یک نمونه در هر طرف قرار گیرد؛ یک کلاس تک‌عضوی کاملاً به آموزش می‌رود.
+- در پایان هر دو بخش برهم زده می‌شوند تا کلاس‌ها در طول آموزش درهم‌آمیخته شوند.
+
+:::caution
+`stratified_split` از `rand::rng()` استفاده می‌کند که یک RNG نخ **بدون بذر (seed)** است،
+بنابراین تقسیم در هر اجرا متفاوت خواهد بود. اگر به آموزش بازتولیدپذیر نیاز دارید، آن را
+با یک `StdRng` بذردار جایگزین کنید (همان‌طور که دیگر نمونه‌های این مخزن انجام می‌دهند).
+:::
+
+### 14. `encode_samples` (خطوط 555-569)
+
+```rust
+    for (index, sample) in samples.iter().enumerate() {
+        let embedding = encode_text(encoder, &sample.text)?;
+
+        result.push((embedding, sample.label));
+
+        if (index + 1) % 10 == 0 || index + 1 == samples.len() {
+            println!("  encoded {}/{}", index + 1, samples.len());
+        }
+    }
+```
+
+- رمزگذار را یک‌بار برای هر نمونه اجرا می‌کند و جفت‌های `(embedding, label)` را
+  برمی‌گرداند و هر 10 نمونه پیشرفت را چاپ می‌کند.
+
+### 15. `encode_text` (خطوط 575-665)
+
+```rust
+    let encoding = encoder
+        .tokenizer
+        .encode(text, true)
+        .map_err(|e| anyhow!("tokenization failed: {e}"))?;
+
+    let ids: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
+    let type_ids: Vec<i64> = encoding.get_type_ids().iter().map(|&id| id as i64).collect();
+    let attention_mask: Vec<i64> = encoding.get_attention_mask().iter().map(|&id| id as i64).collect();
+```
+
+- `encode(text, true)` توکن‌های ویژه را اضافه می‌کند. سه بردار موازی (`input_ids`،
+  `token_type_ids`، `attention_mask`) همان چیزهایی هستند که BERT نیاز دارد. شناسه‌های
+  `u32` به `i64` ارتقا می‌یابند چون نوع پیش‌فرض تنسور عدد صحیح در Candle `i64` است.
+
+```rust
+    if ids.len() != MAX_LENGTH {
+        return Err(anyhow!("unexpected tokenized length: {}, expected {}", ids.len(), MAX_LENGTH));
+    }
+
+    let input_ids = Tensor::new(ids.as_slice(), &encoder.device)?.unsqueeze(0)?;
+    let token_type_ids = Tensor::new(type_ids.as_slice(), &encoder.device)?.unsqueeze(0)?;
+    let attention_mask = Tensor::new(attention_mask.as_slice(), &encoder.device)?.unsqueeze(0)?;
+```
+
+- قرارداد لایه‌گذاری ثابت اینجا بررسی می‌شود. `unsqueeze(0)` بُعد دسته را اضافه می‌کند
+  تا هر تنسور `[1, 64]` شود.
+
+```rust
+    let hidden = encoder
+        .model
+        .forward(&input_ids, &token_type_ids, Some(&attention_mask))
+        .context("BERT forward pass failed")?;
+```
+
+- گذر کامل رو به جلو. شکل خروجی `[batch=1, seq=64, hidden=128]` است.
+
+```rust
+    let sequence = hidden.get(0)?;
+    let cls = sequence.get(0)?.contiguous()?;
+    let embedding = cls.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+```
+
+- `hidden.get(0)` بُعد دسته را حذف می‌کند -> `[64, 128]`؛ `.get(0)` نخستین توکن
+  (`[CLS]`) را انتخاب می‌کند -> `[128]`؛ `.contiguous()` آن را به یک بافر فشرده تبدیل
+  می‌کند تا `to_vec1` کار کند.
+- بردار `[CLS]` همان تعبیه جمله است که به‌عنوان ورودی دسته‌بند استفاده می‌شود.
+
+```rust
+    if embedding.len() != encoder.hidden_size {
+        return Err(anyhow!("unexpected embedding size: {}, expected {}", embedding.len(), encoder.hidden_size));
+    }
+```
+
+- محافظ نهایی که عرض تعبیه با `hidden_size` مطابقت دارد.
+
+### 16. `classifier_path` (خطوط 671-676)
+
+```rust
+fn classifier_path(num_classes: usize, hidden_size: usize) -> PathBuf {
+    PathBuf::from(format!(
+        "{}/classifier_h{}_c{}.safetensors",
+        MODELS_DIR, hidden_size, num_classes
+    ))
+}
+```
+
+- شکل سر را در نام فایل رمزگذاری می‌کند (مثلاً `models/classifier_h128_c3.safetensors`)،
+  بنابراین تغییر مدل یا تعداد کلاس‌ها به‌صورت خودکار سر کش‌شده را بی‌اعتبار می‌کند.
+
+### 17. `create_classifier` (خطوط 682-703)
+
+```rust
+    if num_classes < 2 {
+        return Err(anyhow!("classifier requires at least 2 classes"));
+    }
+
+    let varmap = VarMap::new();
+    let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+    let linear_layer = linear(hidden_size, num_classes, vb.pp("classifier"))?;
+```
+
+- یک `VarMap` تازه مالک پارامترها است. `VarBuilder::from_varmap` آن‌ها را زیر پیشوند
+  `"classifier"` نمایان می‌کند و `linear(hidden, classes, vb)` ماتریس وزن و بایاس را
+  می‌سازد و مقداردهی اولیه می‌کند. همان `VarMap` بعداً برای ذخیره/بارگذاری استفاده می‌شود.
+
+### 18. `train_classifier` (خطوط 709-811)
+
+```rust
+    let mut optimizer = AdamW::new(
+        classifier.varmap.all_vars(),
+        ParamsAdamW {
+            lr: LEARNING_RATE,
+            beta1: 0.9,
+            beta2: 0.999,
+            eps: 1e-8,
+            weight_decay: 0.0,
+        },
+    )?;
+```
+
+- AdamW دقیقاً روی متغیرهای سر (`all_vars()`) با ابرپارامترهای پیش‌فرض استاندارد.
+
+```rust
+    for epoch in 1..=EPOCHS {
+        let mut total_loss = 0.0f64;
+        let mut correct = 0usize;
+
+        let mut indices: Vec<usize> = (0..train.len()).collect();
+        indices.shuffle(&mut rand::rng());
+```
+
+- در هر دوره: بازنشانی معیارها و برهم‌زدن ترتیب نمونه‌ها.
+
+```rust
+        for &index in &indices {
+            let (embedding, label) = &train[index];
+
+            let input = Tensor::new(embedding.as_slice(), &device)?.reshape((1, classifier.hidden_size))?;
+            let target = Tensor::new(&[*label as u32], &device)?;
+
+            let logits = classifier.linear.forward(&input)?;
+            let loss = cross_entropy(&logits, &target)?;
+
+            let loss_value = loss.to_scalar::<f32>()?;
+            total_loss += loss_value as f64;
+
+            let prediction = argmax_row(&logits)?;
+            if prediction == *label {
+                correct += 1;
+            }
+
+            optimizer.backward_step(&loss)?;
+        }
+```
+
+- **به‌روزرسانی‌های برخط (نمونه‌به‌نمونه) به سبک SGD.** هر تکرار یک تعبیه را به
+  `[1, hidden]` تغییر شکل می‌دهد، لاجیت‌های `[1, classes]` و زیان آنتروپی متقاطع را
+  محاسبه می‌کند و بلافاصله `backward_step` را فراخوانی می‌کند، که هم پس‌انتشار *و هم*
+  گام بهینه‌ساز را اجرا می‌کند.
+- دقت از `argmax` لاجیت‌ها شمرده می‌شود.
+
+```rust
+        let train_accuracy = if train.is_empty() { 0.0 } else { correct as f64 / train.len() as f64 };
+        let validation_accuracy = evaluate_classifier(classifier, validation)?;
+        let average_loss = if train.is_empty() { 0.0 } else { total_loss / train.len() as f64 };
+
+        println!(
+            "epoch {:>2}/{:<2} | loss {:.4} | train {:.2}% | validation {:.2}%",
+            epoch, EPOCHS, average_loss, train_accuracy * 100.0, validation_accuracy * 100.0,
+        );
+```
+
+- در هر دوره میانگین زیان و هر دو دقت را چاپ می‌کند تا اثر آموزش قابل‌مشاهده باشد.
+
+### 19. `evaluate_classifier` (خطوط 817-846)
+
+```rust
+    for (embedding, label) in dataset {
+        let input = Tensor::new(embedding.as_slice(), &device)?.reshape((1, classifier.hidden_size))?;
+        let logits = classifier.linear.forward(&input)?;
+        let prediction = argmax_row(&logits)?;
+
+        if prediction == *label {
+            correct += 1;
+        }
+    }
+
+    Ok(correct as f64 / dataset.len() as f64)
+```
+
+- گذر فقط رو به جلو (بدون گام بهینه‌ساز)؛ کسری از نمونه‌هایی که درست طبقه‌بندی شده‌اند را
+  برمی‌گرداند.
+
+### 20. `argmax_row` (خطوط 852-867)
+
+```rust
+    let values = logits.flatten_all()?.to_vec1::<f32>()?;
+
+    let mut best_index = 0usize;
+    let mut best_value = f32::NEG_INFINITY;
+
+    for (index, &value) in values.iter().enumerate() {
+        if value > best_value {
+            best_value = value;
+            best_index = index;
+        }
+    }
+```
+
+- لاجیت‌های `[1, classes]` را تخت می‌کند و شاخص بزرگ‌ترین مقدار را برمی‌گرداند. در حالت
+  تساوی، کمترین شاخص انتخاب می‌شود.
+
+### 21. `predict` (خطوط 873-925)
+
+```rust
+    let embedding = encode_text(encoder, text)?;
+    let input = Tensor::new(embedding.as_slice(), &device)?.reshape((1, classifier.hidden_size))?;
+    let logits = classifier.linear.forward(&input)?;
+```
+
+- رمزگذاری -> تغییر شکل -> سر، و تولید لاجیت‌های `[1, classes]`.
+
+```rust
+    let probabilities = candle_nn::ops::softmax(&logits, 1)?;
+    let probabilities = probabilities.flatten_all()?.to_vec1::<f32>()?;
+
+    let mut best_index = 0usize;
+    let mut best_probability = f32::NEG_INFINITY;
+    for (index, &probability) in probabilities.iter().enumerate() {
+        if probability > best_probability {
+            best_probability = probability;
+            best_index = index;
+        }
+    }
+
+    Ok((best_index, probabilities))
+```
+
+- `softmax` لاجیت‌ها را به یک توزیع احتمال روی کلاس‌ها تبدیل می‌کند. شاخص برنده **و** کل
+  بردار احتمال را برمی‌گرداند تا CLI بتواند هر کلاس را چاپ کند.
+
+### 22. `interactive_loop` (خطوط 931-1008)
+
+```rust
+    for (index, label) in labels.iter().enumerate() {
+        println!("  {} -> {}", index, label);
+    }
+```
+
+- نگاشت شناسه کلاس را چاپ می‌کند تا کاربر بداند هر شناسه چه معنایی دارد.
+
+```rust
+    loop {
+        print!("text> ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        stdin.read_line(&mut input)?;
+
+        let input = input.trim();
+
+        if input.eq_ignore_ascii_case("exit") || input.eq_ignore_ascii_case("quit") {
+            println!("Goodbye.");
+            break;
+        }
+
+        if input.is_empty() {
+            continue;
+        }
+```
+
+- REPL استاندارد: نمایش اعلان، flush تا اعلان قابل‌مشاهده باشد، خواندن یک خط، و رسیدگی
+  به `exit`/`quit` و ورودی خالی.
+
+```rust
+        match predict(encoder, classifier, input) {
+            Ok((class_id, probabilities)) => {
+                println!("Prediction: {}", labels[class_id]);
+
+                for (index, probability) in probabilities.iter().enumerate() {
+                    println!("  {:<20} {:.2}%", labels[index], probability * 100.0);
+                }
+
+                let confidence = probabilities[class_id];
+                println!("Confidence: {:.2}%", confidence * 100.0);
+
+                if confidence < CONFIDENCE_THRESHOLD {
+                    println!("Warning: low confidence.");
+                    println!("The text may be outside the training domains.");
+                }
+            }
+            Err(error) => eprintln!("Prediction error: {error:#}"),
+        }
+```
+
+- برچسب پیش‌بینی‌شده، جدول کامل احتمال، اطمینان، و در صورت پایین‌تر بودن اطمینان از
+  `CONFIDENCE_THRESHOLD` (0.60) یک هشدار را چاپ می‌کند.
+
+---
+
+## اجرای نمونه
+
+فایل‌های مدل باید از قبل در `models/` وجود داشته باشند (این نمونه آن‌ها را
+دانلود **نمی‌کند**).
+
+```bash
+cd examples/text-classification
+cargo run
+```
+
+اجرای نخست دسته‌بند را آموزش می‌دهد و ذخیره می‌کند. اجراهای بعدی
+`models/classifier_h{hidden}_c{classes}.safetensors` را تشخیص می‌دهند و به‌جای آموزش
+آن را بارگذاری می‌کنند.
+
+برای اجبار به یک اجرای آموزش تازه:
+
+```bash
+rm models/classifier_h*_c*.safetensors
+cargo run
+```
+
+## خروجی مورد انتظار
+
+```text
+============================================================
+              Rust Text Classification with Bert
+============================================================
+
+Fixed configuration:
+  Dataset : data/dataset.csv
+  Config  : models/config.json
+  Weights : models/model.safetensors
+  Vocab   : models/vocab.txt
+
+Loading dataset...
+  data/dataset.csv
+
+Loaded N samples.
+Found K classes.
+
+Dataset statistics:
+  Total samples: N
+    0. programming        ...
+    1. ...
+
+Model configuration:
+  hidden size     : 128
+  layers          : 2
+  attention heads : 2
+  vocabulary      : 30522
+Tokenizer ready.
+
+Loading BERT weights...
+  models/model.safetensors
+BERT model loaded.
+
+Classifier:
+  models/classifier_h128_cK.safetensors
+
+No trained classifier found.
+Starting classifier training...
+
+Encoding training samples...
+  encoded 10/...
+...
+Training classifier...
+Classifier architecture:
+  input  : 128
+  output : K
+
+epoch  1/10 | loss 1.xxxx | train xx.xx% | validation xx.xx%
+...
+epoch 10/10 | loss 0.xxxx | train 100.00% | validation 100.00%
+
+============================================================
+Classifier saved:
+  models/classifier_h128_cK.safetensors
+============================================================
+
+============================================================
+                  Interactive Prediction
+============================================================
+
+Classes:
+  0 -> programming
+  1 -> ...
+
+Type text and press Enter.
+Type 'exit' or 'quit' to stop.
+
+text> The server crashed after a memory leak
+Prediction: programming
+
+Probabilities:
+  programming          98.42%
+  ...
+
+Confidence: 98.42%
+```
+
+## مفاهیم کلیدی
+
+1. **استخراج ویژگی + کاوش خطی** — رمزگذار را ثابت نگه دار، تعبیه‌ها را یک‌بار کش کن،
+   یک سر کوچک آموزش بده. بسیار ارزان‌تر از تنظیم دقیق کل ترنسفورمر.
+2. **WordPiece ساخته‌شده از `vocab.txt`** — اجزای جداگانه توکنایزر (نرمال‌ساز،
+   پیش‌توکنایزر، پس‌پردازشگر، برش، لایه‌گذاری) را نشان می‌دهد، به‌جای پنهان‌کردن آن‌ها
+   پشت یک `tokenizer.json`.
+3. **ترتیب قطعی برچسب‌ها** — `BTreeSet` یکسان بودن شناسه‌های کلاس را در طول اجراها
+   تضمین می‌کند.
+4. **انبار پارامتر جداگانه** — `VarMap` سر را به‌صورت مستقل قابل‌ذخیره/بارگذاری می‌کند
+   در حالی که وزن‌های BERT در یک نگاشت حافظه فقط‌خواندنی باقی می‌مانند.
+5. **نظم شکل‌ها** — لایه‌گذاری ثابت `MAX_LENGTH` به‌همراه بررسی‌های صریح طول، شکل
+   تنسورها را قابل‌پیش‌بینی نگه می‌دارد.
+
+## نکات و محدودیت‌ها
+
+- رمزگذار ثابت است: `model.safetensors` هرگز به‌روزرسانی نمی‌شود، بنابراین کیفیت محدود
+  به BERT از پیش آموزش‌دیده و بیانگری یک لایه خطی واحد است.
+- آموزش از یک نمونه در هر گام بهینه‌ساز (اندازه دسته 1) و یک RNG بدون بذر استفاده
+  می‌کند، بنابراین نتایج کاملاً بازتولیدپذیر نیستند. برای پایداری از یک `StdRng` بذردار
+  و/یا دسته‌های کوچک استفاده کنید.
+- هیچ توقف زودهنگام یا زمان‌بندی نرخ یادگیری وجود ندارد؛ `EPOCHS` و `LEARNING_RATE`
+  تنها تنظیم‌کننده‌ها هستند.
+- همه ورودی‌ها حتی وقتی بسیار کوتاه‌تر باشند تا 64 توکن لایه‌گذاری می‌شوند، که ساده اما
+  پرهزینه است.
