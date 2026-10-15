@@ -1,0 +1,309 @@
+---
+title: OCR (تشخیص نویسه نوری)
+description: تشخیص نویسه نوری مبتنی بر TrOCR با استفاده از Candle و ترنسفورمرهای Hugging Face
+---
+
+# OCR (تشخیص نویسه نوری)
+
+## نمای کلی
+
+این مثال تشخیص نویسه نوری مبتنی بر TrOCR را با استفاده از [Candle](https://github.com/huggingface/candle) و ترنسفورمرهای Hugging Face نشان میدهد.
+
+## کد منبع
+
+- [examples/OCR/src/main.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/OCR/src/main.rs)
+- [examples/OCR/src/image_processor.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/OCR/src/image_processor.rs)
+
+## وضعیت
+
+:::caution[در حال انجام]
+در حال حاضر `src/main.rs` تنها توابع کمکی دانلود مدل را تعریف میکند — **هیچ `fn main`ی ندارد** و هرگز `mod image_processor` را اعلان نمیکند، بنابراین این crate هنوز بهصورت یک باینری ساخته نمیشود و `cargo run` شکست میخورد. این صفحه بخشهای موجود و جریان استنتاج مورد نظر را مستند میکند.
+:::
+
+## ساختار پروژه
+
+```text
+examples/OCR/
+├── Cargo.toml                 # Crate manifest and dependencies
+├── src/
+│   ├── main.rs                # Model download helpers (no main() yet)
+│   └── image_processor.rs     # Image load + normalize to a TrOCR input tensor
+└── models/
+    └── recognizer/            # Populated by ensure_model_files() (contains a stray 'ddd' file)
+```
+
+| مسیر | نقش |
+|------|------|
+| `Cargo.toml` | crate به نام `ocr` و وابستگیهای آن را تعریف میکند |
+| `src/main.rs` | تنها `ensure_model_files` / `download_model_file` |
+| `src/image_processor.rs` | `ImageProcessor::load` و `preprocess` (هنوز از `main` ارجاع داده نشدهاند) |
+| `models/recognizer/` | مقصد فایلهای `config.json`، `model.safetensors` و `tokenizer.json` |
+
+## وابستگیها
+
+| Crate | نسخه | هدف |
+|-------|---------|---------|
+| `anyhow` | 1 | مدیریت خطا |
+| `candle-core` | 0.9 | تنسورها، `Device`، `DType` |
+| `candle-nn` | 0.9 | ماژولهای شبکه عصبی |
+| `candle-transformers` | 0.9 | پیادهسازیهای مدل ترنسفورمر |
+| `image` | 0.25 | بارگذاری و تغییر اندازه تصویر |
+| `ureq` | 2 | دانلود HTTP قالبی فایلهای مدل (ویژگی `tls`) |
+| `serde` / `serde_json` | 1 | تجزیه پیکربندی/توکنایزر |
+| `kornia` | 0.1 | اعلان شده اما **استفاده نمیشود** (پیشپردازش بهصورت دستی نوشته شده است) |
+| `tokenizers` | 0.21 | اعلان شده اما **هنوز استفاده نمیشود** (برای رمزگشایی لازم است) |
+
+## مدل
+
+**TrOCR** (تشخیص نویسه نوری مبتنی بر ترنسفورمر) یک مدل OCR پیشرفته است که از معماری ترنسفورمر (رمزگذار Vision Transformer + رمزگشای Transformer) برای تشخیص متن استفاده میکند.
+
+## جزئیات پیادهسازی
+
+- **کتابخانه**: Candle (candle-core، candle-nn، candle-transformers)
+- **مدل**: TrOCR (از پیش آموزشدیده روی متن چاپی/دستنویس)
+- **وظیفه**: تشخیص متن از تصاویر
+- **منبع مدل**: Hugging Face Hub (microsoft/trocr-base-printed)
+- **توکنایزر**: توکنایزر WordPiece (بارگذاریشده از tokenizer.json)
+
+## اجرای مثال
+
+```bash
+cd examples/OCR
+cargo run
+```
+
+## بررسی گامبهگام کد (خط به خط)
+
+### main.rs - دانلود مدل (خطوط ۱ تا ۸۵)
+
+```rust
+use anyhow::{Context, Result};
+use std::{
+    fs::{self, File},
+    io::{self, BufReader, Read, Write},
+    path::Path,
+};
+
+const MODEL_DIR: &str = "models/recognizer";
+
+const MODEL_FILES: &[&str] = &["config.json", "model.safetensors", "tokenizer.json"];
+
+const MODEL_BASE_URL: &str = "https://huggingface.co/microsoft/trocr-base-printed/resolve/main/";
+
+fn ensure_model_files() -> Result<()> {
+    fs::create_dir_all(MODEL_DIR).context("Failed to create model directory")?;
+
+    for filename in MODEL_FILES {
+        let destination = Path::new(MODEL_DIR).join(filename);
+
+        if destination.is_file() {
+            let metadata = fs::metadata(&destination)?;
+
+            if metadata.len() > 0 {
+                println!("Model file exists: {}", destination.display());
+                continue;
+            }
+        }
+
+        download_model_file(filename, &destination)?;
+    }
+
+    Ok(())
+}
+
+fn download_model_file(filename: &str, destination: &Path) -> Result<()> {
+    let url = format!("{MODEL_BASE_URL}{filename}");
+
+    println!("Downloading {filename}...");
+    println!("URL: {url}");
+
+    let response = ureq::get(&url).call().with_context(|| {
+        format!(
+            "Failed to download {filename}. \
+                 Check your internet connection and the Hugging Face URL."
+        )
+    })?;
+
+    let temporary_path = destination.with_extension("download");
+
+    let result = (|| -> Result<()> {
+        let mut output =
+            File::create(&temporary_path).context("Failed to create temporary model file")?;
+
+        let mut reader = response.into_reader();
+
+        io::copy(&mut reader, &mut output).context("Failed to write downloaded model file")?;
+
+        output.flush()?;
+
+        let size = output.metadata()?.len();
+
+        if size == 0 {
+            anyhow::bail!("Downloaded file is empty: {filename}");
+        }
+
+        drop(output);
+
+        fs::rename(&temporary_path, destination)
+            .context("Failed to move downloaded file into place")?;
+
+        println!(
+            "Downloaded {} ({:.2} MB)",
+            destination.display(),
+            size as f64 / (1024.0 * 1024.0)
+        );
+
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+
+    result
+}
+```
+
+**جزئیات دانلود مدل:**
+- **خطوط ۸ تا ۱۰**: دایرکتوری مدل و فایلهای مورد نیاز (پیکربندی، وزنها، توکنایزر)
+- **خط ۱۲**: نشانی Hugging Face Hub برای microsoft/trocr-base-printed
+- **خطوط ۱۴ تا ۳۳**: بررسی فایلهای موجود، در صورت وجود و غیرخالی بودن از دانلود صرفنظر میشود
+- **خطوط ۳۵ تا ۸۴**: دانلود با ureq، نوشتن در فایل موقت، تغییر نام اتمیک
+- **خطوط ۵۰ تا ۵۶**: دانلود جریانی مستقیماً به فایل (بهینه از نظر حافظه)
+- **خطوط ۶۰ تا ۶۴**: اعتبارسنجی خالی نبودن فایل دانلودشده
+- **خطوط ۶۸ تا ۶۹**: تغییر نام اتمیک از .download به نام نهایی
+
+### image_processor.rs - پیشپردازش تصویر (خطوط ۱ تا ۵۴)
+
+```rust
+use anyhow::{Context, Result};
+use candle_core::{DType, Device, Tensor};
+use image::{DynamicImage, ImageReader};
+
+pub struct ImageProcessor {
+    width: u32,
+    height: u32,
+}
+
+impl ImageProcessor {
+    pub fn new() -> Self {
+        Self {
+            width: 384,
+            height: 384,
+        }
+    }
+
+    pub fn load(&self, path: &str) -> Result<DynamicImage> {
+        let image = ImageReader::open(path)
+            .with_context(|| format!("Cannot open image: {path}"))?
+            .decode()
+            .context("Cannot decode image")?;
+
+        Ok(image)
+    }
+
+    pub fn preprocess(&self, image: &DynamicImage, device: &Device) -> Result<Tensor> {
+        let resized = image.resize_exact(
+            self.width,
+            self.height,
+            image::imageops::FilterType::Triangle,
+        );
+
+        let rgb = resized.to_rgb8();
+        let raw = rgb.into_raw();
+
+        let tensor = Tensor::from_vec(raw, (self.height as usize, self.width as usize, 3), device)?
+            .permute((2, 0, 1))?
+            .to_dtype(DType::F32)?;
+
+        // Convert pixels from [0, 255] to [0, 1].
+        let tensor = (tensor / 255.0)?;
+
+        // Normalize using mean=0.5 and std=0.5 per RGB channel.
+        let mean = Tensor::from_vec(vec![0.5_f32, 0.5, 0.5], (3, 1, 1), device)?;
+
+        let std = Tensor::from_vec(vec![0.5_f32, 0.5, 0.5], (3, 1, 1), device)?;
+
+        let normalized = tensor.broadcast_sub(&mean)?.broadcast_div(&std)?;
+
+        // TrOCR expects a batch dimension: [1, 3, 384, 384].
+        Ok(normalized.unsqueeze(0)?)
+    }
+}
+```
+
+**خط لوله پیشپردازش (مخصوص TrOCR):**
+- **خطوط ۱۱ تا ۱۶**: اندازه ورودی ثابت ۳۸۴×۳۸۴ (الزام مدل پایه TrOCR)
+- **خطوط ۱۸ تا ۲۵**: بارگذاری و رمزگشایی تصویر
+- **خطوط ۲۷ تا ۳۸**: تغییر اندازه به دقیقاً ۳۸۴×۳۸۴
+- **خطوط ۴۰ تا ۴۱**: تبدیل به RGB، دریافت بایتهای خام (چیدمان HWC)
+- **خط ۴۲**: ساخت تنسور [H, W, 3] → جایگشت به [3, H, W] (CHW)
+- **خط ۴۳**: تبدیل به F32
+- **خط ۴۶**: مقیاسدهی [0, 255] → [0, 1]
+- **خطوط ۴۹ تا ۵۰**: نرمالسازی با mean=0.5 و std=0.5 (TrOCR از این نرمالسازی استفاده میکند)
+- **خط ۵۲**: افزودن بُعد دسته → [1, 3, 384, 384]
+
+### کد استنتاج موجود نیست
+
+توجه: پیادهسازی فعلی تنها شامل دانلود مدل و پیشپردازش تصویر است. استنتاج واقعی TrOCR (رمزگذار Vision Transformer + رمزگشای Transformer با تولید توکن خودرگرسیو) در ماژولهای دیگری پیادهسازی میشود. جریان معمول استنتاج TrOCR به این صورت خواهد بود:
+
+```rust
+// Pseudocode for TrOCR inference
+pub struct TrOCR {
+    encoder: VisionTransformer,
+    decoder: TransformerDecoder,
+    tokenizer: Tokenizer,
+}
+
+impl TrOCR {
+    pub fn recognize(&self, image_tensor: &Tensor) -> Result<String> {
+        // 1. Encode image: [1, 3, 384, 384] -> [1, seq_len, hidden_dim]
+        let encoder_outputs = self.encoder.forward(image_tensor)?;
+
+        // 2. Autoregressive decoding
+        let mut decoder_input_ids = vec![self.tokenizer.get_vocab()["[CLS]"]];
+        let mut generated = Vec::new();
+
+        for _ in 0..max_length {
+            let logits = self.decoder.forward(
+                &Tensor::new(&[decoder_input_ids], device)?,
+                &encoder_outputs
+            )?;
+
+            let next_token = logits.argmax(-1)?;
+            if next_token == self.tokenizer.get_vocab()["[SEP]"] {
+                break;
+            }
+            generated.push(next_token);
+            decoder_input_ids.push(next_token);
+        }
+
+        // 3. Decode tokens to text
+        self.tokenizer.decode(&generated, true)
+    }
+}
+```
+
+## فایلهای مدل مورد نیاز
+
+بهطور خودکار توسط `ensure_model_files()` در `models/recognizer/` دانلود میشود:
+- `config.json` - پیکربندی مدل TrOCR
+- `model.safetensors` - وزنهای مدل (حدود ۱۵۰ مگابایت برای مدل پایه)
+- `tokenizer.json` - توکنایزر WordPiece (پس از پیادهسازی رمزگشایی مورد نیاز است)
+
+## خروجی مورد انتظار
+
+پس از پیادهسازی کامل، برنامه متن تشخیصدادهشده از تصویر(های) ورودی را چاپ میکند:
+
+```
+Recognized text: "Hello World"
+```
+
+## یادداشتهای معماری
+
+TrOCR از موارد زیر تشکیل شده است:
+1. **رمزگذار**: Vision Transformer (ViT) - پچهای تصویر را به امبدینگها تبدیل میکند
+2. **رمزگشا**: رمزگشای Transformer - توکنهای متن را بهصورت خودرگرسیو تولید میکند
+3. **توکنایزر**: واژگان WordPiece (حدود ۵۰ هزار توکن)
+
+این مدل روی مجموعهدادههای بزرگمقیاس از متنهای چاپی/دستنویس مصنوعی و واقعی از پیش آموزشدیده شده است.
