@@ -1,14 +1,94 @@
-# Ignore todo.md
-todo.md
+# ------------------------------------------------------------------
+# Astro
+# ------------------------------------------------------------------
+# Build output
+dist/
+.output/
 
-# Rust target directories
-**/target/
+# Generated types (astro sync)
+.astro/
 
-# IDE
-.vscode/
+# Environment variables
+.env
+.env.*
+!.env.example
+!.env.test
+
+# ------------------------------------------------------------------
+# Dependencies
+# ------------------------------------------------------------------
+node_modules/
+.pnp
+.pnp.js
+.pnp.cjs
+
+# ------------------------------------------------------------------
+# Logs
+# ------------------------------------------------------------------
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.log
+logs/
+
+# ------------------------------------------------------------------
+# Package manager / build caches
+# ------------------------------------------------------------------
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+.turbo/
+.npm/
+.yarn/
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# ------------------------------------------------------------------
+# Testing / coverage
+# ------------------------------------------------------------------
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+blob-report/
+
+# ------------------------------------------------------------------
+# Deployment platforms
+# ------------------------------------------------------------------
+.vercel/
+.netlify/
+.wrangler/
+.firebase/
+.aws-sam/
+.serverless/
+
+# ------------------------------------------------------------------
+# Editors / IDEs
+# ------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
 .idea/
 *.swp
 *.swo
+*.sublime-workspace
+*.sublime-project
 
-# OS
+# ------------------------------------------------------------------
+# OS files
+# ------------------------------------------------------------------
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
