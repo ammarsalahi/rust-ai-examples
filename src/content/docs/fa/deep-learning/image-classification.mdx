@@ -1,0 +1,379 @@
+---
+title: طبقه‌بندی تصویر
+description: طبقه‌بندی تصویر مبتنی بر ResNet-18 روی ImageNet با استفاده از Candle
+---
+
+# طبقه‌بندی تصویر
+
+## مرور کلی
+
+این نمونه، طبقه‌بندی تصویر مبتنی بر ResNet-18 روی ImageNet را با استفاده از [Candle](https://github.com/huggingface/candle) نشان می‌دهد.
+
+## کد منبع
+
+- [examples/image-classification/src/main.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/image-classification/src/main.rs)
+- [examples/image-classification/src/model.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/image-classification/src/model.rs)
+- [examples/image-classification/src/preprocessing.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/image-classification/src/preprocessing.rs)
+- [examples/image-classification/src/downloader.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/image-classification/src/downloader.rs)
+
+## ساختار پروژه
+
+```text
+examples/image-classification/
+├── Cargo.toml                 # Crate manifest and dependencies
+└── src/
+    ├── main.rs                # CLI entry point: parse args, orchestrate, print top-5
+    ├── downloader.rs          # Fetches model.safetensors and ImageNet labels if missing
+    ├── model.rs               # ImageClassifier: loads ResNet-18 and runs inference
+    └── preprocessing.rs       # load_image: resize + normalize into an NCHW tensor
+```
+
+| مسیر | نقش |
+|------|------|
+| `Cargo.toml` | crate با نام `image-classification` و وابستگی‌های آن را تعریف می‌کند |
+| `src/main.rs` | سه ماژول را اعلام و خط لوله را به‌هم متصل می‌کند |
+| `src/downloader.rs` | در نخستین اجرا وزن‌ها و فهرست برچسب‌ها را در `models/` دانلود می‌کند |
+| `src/model.rs` | `candle_transformers::models::resnet` و منطق softmax/top-k را پوشش می‌دهد |
+| `src/preprocessing.rs` | بارگذاری تصویر، تغییر اندازه و نرمال‌سازی ImageNet |
+
+## وابستگی‌ها
+
+| Crate | نسخه | هدف |
+|-------|---------|---------|
+| `anyhow` | 1 | مدیریت خطا |
+| `candle-core` | 0.9 | تنسورها، `Device`، `DType` |
+| `candle-nn` | 0.9 | `VarBuilder`، `Module`، `ops::softmax` |
+| `candle-transformers` | 0.9 | `resnet::resnet18` |
+| `image` | 0.25 | بارگذاری/رمزگشایی JPEG، PNG و WebP (`default-features = false`) |
+| `reqwest` | 0.12 | کلاینت HTTP مسدودکننده (`blocking`، `rustls-tls`) برای دانلودها |
+| `serde_json` | 1 | تجزیه فهرست برچسب‌های ImageNet |
+
+## الگوریتم
+
+**ResNet-18** (شبکه باقی‌مانده با ۱۸ لایه) یک معماری شبکه عصبی پیچشی است که اتصال‌های پرشی (اتصال‌های باقی‌مانده) را معرفی کرد تا آموزش شبکه‌های بسیار عمیق امکان‌پذیر شود.
+
+## جزئیات پیاده‌سازی
+
+- **کتابخانه**: Candle (candle-core, candle-nn, candle-transformers)
+- **مدل**: ResNet-18 (از پیش آموزش‌دیده روی ImageNet)
+- **وظیفه**: طبقه‌بندی تصویر (۱۰۰۰ کلاس)
+- **ورودی**: تصاویر RGB با ابعاد 224x224
+- **قالب مدل**: SafeTensors
+- **برچسب‌ها**: برچسب‌های ۱۰۰۰ کلاس ImageNet (JSON)
+
+## اجرای نمونه
+
+```bash
+cd examples/image-classification
+cargo run --release -- path/to/image.jpg
+# Or use default image:
+cargo run --release
+```
+
+## مرور گام‌به‌گام کد (خط به خط)
+
+### main.rs - نقطه ورود (خطوط 1-70)
+
+```rust
+mod downloader;
+mod model;
+mod preprocessing;
+
+use anyhow::{Context, Result};
+use std::path::Path;
+
+fn main() -> Result<()> {
+    println!("=================================");
+    println!(" Rust Image Classification");
+    println!(" Candle + ResNet-18");
+    println!("=================================\n");
+
+    let image_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "data/image.jpg".to_string());
+
+    let image_path = Path::new(&image_path);
+
+    if !image_path.exists() {
+        anyhow::bail!(
+            "Image not found: {}\n\
+             Usage: cargo run --release -- path/to/image.jpg",
+            image_path.display()
+        );
+    }
+
+    println!("Checking model files...");
+    downloader::ensure_model_files()?;
+
+    let model_path = Path::new("models/model.safetensors");
+    let labels_path = Path::new("models/imagenet-labels.json");
+
+    let labels: Vec<String> = serde_json::from_slice(
+        &std::fs::read(labels_path).context("Could not read ImageNet labels")?,
+    )
+    .context("Invalid ImageNet labels JSON")?;
+
+    println!("\nLoading model...");
+    let classifier = model::ImageClassifier::new(model_path)?;
+
+    println!("Preparing image...");
+    let input = preprocessing::load_image(image_path, classifier.device())?;
+
+    println!("Running inference...\n");
+    let predictions = classifier.predict(&input, 5)?;
+
+    println!("Image: {}", image_path.display());
+    println!("Top predictions:");
+    println!("---------------------------------");
+
+    for (rank, (class_id, probability)) in predictions.iter().enumerate() {
+        let label = labels
+            .get(*class_id)
+            .map(String::as_str)
+            .unwrap_or("Unknown class");
+
+        println!(
+            "{}. {} (class {}, {:.2}%)",
+            rank + 1,
+            label,
+            class_id,
+            probability * 100.0
+        );
+    }
+
+    println!("---------------------------------");
+
+    Ok(())
+}
+```
+
+**جریان اصلی:**
+1. **خطوط 8-26**: تجزیه آرگومان خط فرمان برای مسیر تصویر (به‌طور پیش‌فرض `data/image.jpg`)
+2. **خطوط 28-30**: دانلود فایل‌های مدل در صورت نبودن (از ماژول downloader)
+3. **خطوط 32-37**: بارگذاری برچسب‌های کلاس ImageNet از JSON
+4. **خطوط 39-40**: راه‌اندازی ImageClassifier (ResNet-18 را از SafeTensors بارگذاری می‌کند)
+5. **خطوط 42-43**: پیش‌پردازش تصویر به تنسور (تغییر اندازه، نرمال‌سازی، قالب CHW)
+6. **خطوط 45-46**: اجرای استنتاج و دریافت ۵ پیش‌بینی برتر
+7. **خطوط 48-65**: چاپ نتایج همراه با نام کلاس‌ها و احتمالات
+
+### model.rs - بارگذاری مدل و استنتاج (خطوط 1-49)
+
+```rust
+use anyhow::{Context, Result};
+use candle_core::{DType, Device, Tensor};
+use candle_nn::VarBuilder;
+use candle_transformers::models::resnet;
+use std::path::Path;
+
+pub struct ImageClassifier {
+    model: resnet::ResNet,
+    device: Device,
+}
+
+impl ImageClassifier {
+    pub fn new(model_path: &Path) -> Result<Self> {
+        let device = Device::Cpu;
+
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device) }
+            .context("Could not load the ResNet safetensors checkpoint")?;
+
+        let model = resnet::resnet18(vb, 1000)
+            .context("Could not initialize ResNet-18; check checkpoint compatibility")?;
+
+        Ok(Self { model, device })
+    }
+
+    pub fn predict(&self, image: &Tensor, top_k: usize) -> Result<Vec<(usize, f32)>> {
+        use candle_nn::Module;
+
+        let logits = self
+            .model
+            .forward(image)
+            .context("Model inference failed")?;
+
+        let probabilities = candle_nn::ops::softmax(&logits, 1)?
+            .squeeze(0)?
+            .to_vec1::<f32>()?;
+
+        let mut predictions: Vec<(usize, f32)> = probabilities.into_iter().enumerate().collect();
+
+        predictions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        predictions.truncate(top_k);
+
+        Ok(predictions)
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+}
+```
+
+**جزئیات کلیدی پیاده‌سازی:**
+- **خطوط 13-23**: بارگذاری مدل با SafeTensors نگاشت‌شده در حافظه (کارا، بدون کپی کامل)
+- **خط 19**: `resnet::resnet18(vb, 1000)` - یک ResNet-18 با ۱۰۰۰ کلاس خروجی می‌سازد
+- **خطوط 25-43**: خط لوله استنتاج:
+  1. عبور رو‌به‌جلو از مدل → logits با ابعاد [1, 1000]
+  2. softmax روی بُعد 1 → احتمالات با ابعاد [1, 1000]
+  3. حذف بُعد دسته (batch) → [1000]
+  4. تبدیل به `Vec<f32>`
+  5. شمارش برای به‌دست‌آوردن جفت‌های (class_id, probability)
+  6. مرتب‌سازی بر اساس احتمال به‌صورت نزولی
+  7. برش تا top_k
+
+### preprocessing.rs - پیش‌پردازش تصویر (خطوط 1-39)
+
+```rust
+use anyhow::{Context, Result};
+use candle_core::{Device, Tensor};
+use image::imageops::FilterType;
+use std::path::Path;
+
+const IMAGE_SIZE: u32 = 224;
+
+const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+const STD: [f32; 3] = [0.229, 0.224, 0.225];
+
+pub fn load_image(path: &Path, device: &Device) -> Result<Tensor> {
+    let image = image::open(path)
+        .with_context(|| format!("Could not open image: {}", path.display()))?
+        .to_rgb8();
+
+    let resized = image::imageops::resize(&image, IMAGE_SIZE, IMAGE_SIZE, FilterType::Triangle);
+
+    let mut channels = vec![0.0_f32; 3 * IMAGE_SIZE as usize * IMAGE_SIZE as usize];
+
+    let plane_size = (IMAGE_SIZE * IMAGE_SIZE) as usize;
+
+    for (x, y, pixel) in resized.enumerate_pixels() {
+        let index = (y * IMAGE_SIZE + x) as usize;
+
+        for channel in 0..3 {
+            let value = pixel[channel] as f32 / 255.0;
+
+            channels[channel * plane_size + index] = (value - MEAN[channel]) / STD[channel];
+        }
+    }
+
+    let tensor = Tensor::from_vec(
+        channels,
+        (1, 3, IMAGE_SIZE as usize, IMAGE_SIZE as usize),
+        device,
+    )?;
+
+    Ok(tensor)
+}
+```
+
+**خط لوله پیش‌پردازش (استاندارد ImageNet):**
+1. **خطوط 11-14**: بارگذاری تصویر و تبدیل به RGB8
+2. **خط 16**: تغییر اندازه به 224x224 با فیلتر Triangle (دوخطی)
+3. **خطوط 18-30**: چیدمان دستی CHW (کانال-ارتفاع-عرض) همراه با نرمال‌سازی:
+   - تبدیل مقادیر پیکسل از [0, 255] → [0, 1]
+   - اعمال نرمال‌سازی ImageNet: (x - mean) / std برای هر کانال
+   - میانگین = [0.485, 0.456, 0.406]، انحراف معیار = [0.229, 0.224, 0.225]
+   - ذخیره به ترتیب CHW: نخست همه پیکسل‌های R، سپس همه G و سپس همه B
+4. **خطوط 32-36**: ساخت تنسور با شکل [1, 3, 224, 224] (قالب NCHW)
+
+### downloader.rs - دانلود مدل (خطوط 1-60)
+
+```rust
+use anyhow::{Context, Result};
+use std::fs;
+use std::path::Path;
+
+const MODEL_URL: &str =
+    "https://huggingface.co/timm/resnet18.a1_in1k/resolve/main/model.safetensors";
+
+const LABELS_URL: &str = "https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet-simple-labels.json";
+
+pub fn download_file(url: &str, destination: &Path) -> Result<()> {
+    if destination.exists() {
+        println!("Already exists: {}", destination.display());
+        return Ok(());
+    }
+
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    println!("Downloading: {url}");
+
+    let response = reqwest::blocking::Client::new()
+        .get(url)
+        .send()
+        .with_context(|| format!("Failed to request {url}"))?
+        .error_for_status()
+        .with_context(|| format!("Download failed: {url}"))?;
+
+    let bytes = response.bytes()?;
+
+    if bytes.is_empty() {
+        anyhow::bail!("Downloaded file is empty: {url}");
+    }
+
+    let temporary_path = destination.with_extension("download");
+
+    fs::write(&temporary_path, &bytes)
+        .with_context(|| format!("Failed to write {}", temporary_path.display()))?;
+
+    fs::rename(&temporary_path, destination)
+        .with_context(|| format!("Failed to save {}", destination.display()))?;
+
+    println!(
+        "Downloaded {} ({:.2} MB)",
+        destination.display(),
+        bytes.len() as f64 / 1_000_000.0
+    );
+
+    Ok(())
+}
+
+pub fn ensure_model_files() -> Result<()> {
+    let model_path = Path::new("models/model.safetensors");
+    let labels_path = Path::new("models/imagenet-labels.json");
+
+    download_file(MODEL_URL, model_path)?;
+    download_file(LABELS_URL, labels_path)?;
+
+    Ok(())
+}
+```
+
+**جزئیات دانلود:**
+- **خطوط 5-8**: دو URL منبع — یک چک‌پوینت ResNet-18 (`timm/resnet18.a1_in1k`) و
+  ۱۰۰۰ برچسب ساده ImageNet.
+- **خطوط 10-14**: اگر مقصد از قبل موجود باشد، `download_file` زودتر بازمی‌گردد، بنابراین فقط
+  نخستین اجرا به شبکه دست می‌زند.
+- **خطوط 16-18**: در صورت نیاز پوشه والد (`models/`) را می‌سازد.
+- **خطوط 22-27**: درخواست GET مسدودکننده؛ `.error_for_status()` کدهای خطای HTTP را به `Err` تبدیل می‌کند.
+- **خطوط 29-33**: بدنه خالی را رد می‌کند تا دانلود ناموفق هرگز فایل صفر بایتی بر جای نگذارد.
+- **خطوط 35-41**: در یک فایل موقت با پسوند `.download` می‌نویسد و آن را به‌صورت اتمیک به جای خود منتقل می‌کند،
+  بنابراین اجرای قطع‌شده نمی‌تواند یک `model.safetensors` خراب بر جای بگذارد.
+- **خطوط 52-58**: `ensure_model_files` هر دو مصنوع را در `models/` دانلود می‌کند.
+
+## فایل‌های مدل
+
+`models/` به‌طور خودکار توسط دانلودر بالا پر می‌شود:
+
+| فایل | منبع | نقش |
+|------|--------|------|
+| `model.safetensors` | `timm/resnet18.a1_in1k` | وزن‌های ResNet-18 |
+| `imagenet-labels.json` | `imagenet-simple-labels` | ۱۰۰۰ نام کلاس انسان‌خوان |
+
+## خروجی مورد انتظار
+
+```
+Image: data/cat.jpg
+Top predictions:
+---------------------------------
+1. tabby cat (class 281, 92.34%)
+2. tiger cat (class 282, 4.12%)
+3. Egyptian cat (class 285, 1.23%)
+4. lynx (class 289, 0.89%)
+5. red fox (class 277, 0.45%)
+---------------------------------
+```
+
+برنامه ۵ کلاس برتر پیش‌بینی‌شده را همراه با احتمالاتشان برای تصویر ورودی چاپ می‌کند.

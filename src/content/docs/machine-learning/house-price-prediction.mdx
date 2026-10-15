@@ -1,0 +1,473 @@
+---
+title: House Price Prediction
+description: Linear regression for house price prediction with Linfa
+---
+
+# House Price Prediction
+
+## Overview
+
+This example demonstrates linear regression for house price prediction with MAE, RMSE, and R² metrics using [Linfa](https://github.com/rust-ml/linfa).
+
+## Source Code
+
+[examples/house-price-prediction/src/main.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/house-price-prediction/src/main.rs)
+
+## Project Structure
+
+```text
+examples/house-price-prediction/
+├── Cargo.toml                 # Crate manifest and dependencies
+├── src/
+│   └── main.rs                # Whole example: scaler, model, metrics, CLI (323 lines)
+└── data/
+    └── house.csv              # House records with a header row
+```
+
+| Path | Role |
+|------|------|
+| `Cargo.toml` | Defines the `house-price-prediction` crate and its dependencies |
+| `src/main.rs` | Dataset loading, a hand-written `StandardScaler`, regression, metrics |
+| `data/house.csv` | 5 numeric features + a continuous `price_usd` target |
+
+## Dependencies
+
+| Crate | Version | Purpose |
+|-------|---------|---------|
+| `anyhow` | 1 | Error propagation and `Context` messages |
+| `csv` | 1 | Deserializing `house.csv` into a struct |
+| `linfa` | 0.8.1 | `Dataset` and the `Fit`/`Predict` traits |
+| `linfa-linear` | 0.8.1 | `LinearRegression` |
+| `ndarray` | 0.16 | `Array1`/`Array2` feature and target matrices |
+| `rand` | 0.8 | Seeded shuffling for a reproducible split |
+| `serde` | 1 | `Deserialize` for the CSV row struct |
+
+## Dataset Format
+
+`data/house.csv` has a header row followed by one house per line:
+
+```csv
+area_sqft,bedrooms,bathrooms,age_years,distance_km,price_usd
+750,1,1,20,12,145000
+850,2,1,15,10,175000
+900,2,1,10,8,195000
+```
+
+- `area_sqft` — living area in square feet (must be > 0).
+- `bedrooms`, `bathrooms` — room counts.
+- `age_years` — age of the property.
+- `distance_km` — distance to the city centre.
+- `price_usd` — target variable (must be > 0).
+
+## Algorithm
+
+Linear regression is a linear approach to modeling the relationship between a scalar response and one or more explanatory variables. It's one of the most fundamental algorithms in machine learning.
+
+## Implementation Details
+
+- **Library**: Linfa
+- **Dataset**: House prices dataset (CSV with 5 features + continuous target)
+- **Task**: Regression (predicting continuous values)
+- **Evaluation**: MAE (Mean Absolute Error), RMSE (Root Mean Square Error), R² (Coefficient of Determination)
+- **Preprocessing**: StandardScaler (z-score normalization) fitted on training data only
+
+## Running the Example
+
+```bash
+cd examples/house-price-prediction
+cargo run
+```
+
+## Code Walkthrough (Line by Line)
+
+### Imports and Constants (Lines 1-16)
+
+```rust
+use anyhow::{Context, Result, bail};
+use linfa::Dataset;
+use linfa::traits::{Fit, Predict};
+use linfa_linear::LinearRegression;
+use ndarray::{Array1, Array2};
+use rand::SeedableRng;
+use rand::seq::SliceRandom;
+use rand::rngs::StdRng;
+use serde::Deserialize;
+use std::fs::File;
+use std::path::Path;
+
+const DATASET_PATH: &str = "data/houses.csv";
+const FEATURE_COUNT: usize = 5;
+const TRAIN_RATIO: f64 = 0.8;
+```
+
+### Data Structures (Lines 17-37)
+
+```rust
+#[derive(Debug, Deserialize, Clone)]
+struct House {
+    area_sqft: f64,
+    bedrooms: f64,
+    bathrooms: f64,
+    age_years: f64,
+    distance_km: f64,
+    price_usd: f64,
+}
+
+impl House {
+    fn features(&self) -> [f64; FEATURE_COUNT] {
+        [
+            self.area_sqft,
+            self.bedrooms,
+            self.bathrooms,
+            self.age_years,
+            self.distance_km,
+        ]
+    }
+}
+```
+
+- 5 features: area, bedrooms, bathrooms, age, distance from city center
+- Target: price_usd (continuous)
+
+### StandardScaler Implementation (Lines 39-93)
+
+```rust
+#[derive(Debug)]
+struct StandardScaler {
+    means: [f64; FEATURE_COUNT],
+    stds: [f64; FEATURE_COUNT],
+}
+
+impl StandardScaler {
+    fn fit(houses: &[House]) -> Result<Self> {
+        if houses.is_empty() {
+            bail!("Cannot fit a scaler on an empty dataset");
+        }
+
+        let mut means = [0.0; FEATURE_COUNT];
+        let mut stds = [0.0; FEATURE_COUNT];
+
+        for house in houses {
+            for (index, value) in house.features().iter().enumerate() {
+                means[index] += value;
+            }
+        }
+
+        for mean in &mut means {
+            *mean /= houses.len() as f64;
+        }
+
+        for house in houses {
+            for (index, value) in house.features().iter().enumerate() {
+                let difference = value - means[index];
+                stds[index] += difference * difference;
+            }
+        }
+
+        for std in &mut stds {
+            *std = (*std / houses.len() as f64).sqrt();
+
+            // Avoid division by zero for constant features.
+            if *std == 0.0 {
+                *std = 1.0;
+            }
+        }
+
+        Ok(Self { means, stds })
+    }
+
+    fn transform(&self, features: &[f64; FEATURE_COUNT]) -> [f64; FEATURE_COUNT] {
+        let mut output = [0.0; FEATURE_COUNT];
+
+        for index in 0..FEATURE_COUNT {
+            output[index] =
+                (features[index] - self.means[index]) / self.stds[index];
+        }
+
+        output
+    }
+}
+```
+
+**Lines 39-93**: Custom StandardScaler implementation (z-score normalization)
+- **fit()**: Computes mean and std for each feature from training data only (prevents data leakage)
+- **transform()**: Applies (x - mean) / std to normalize features
+- **Line 75-77**: Handles constant features by setting std=1.0 to avoid division by zero
+
+### Dataset Loading (Lines 95-134)
+
+```rust
+fn load_dataset(path: &str) -> Result<Vec<House>> {
+    let file = File::open(path)
+        .with_context(|| format!("Could not open dataset: {path}"))?;
+
+    let mut reader = csv::Reader::from_reader(file);
+
+    let mut houses = Vec::new();
+
+    for record in reader.deserialize::<House>() {
+        let house = record.context("Could not parse a CSV row")?;
+
+        let values = [
+            house.area_sqft,
+            house.bedrooms,
+            house.bathrooms,
+            house.age_years,
+            house.distance_km,
+            house.price_usd,
+        ];
+
+        if values.iter().any(|value| !value.is_finite()) {
+            bail!("Dataset contains a non-finite numeric value");
+        }
+
+        if house.area_sqft <= 0.0 || house.price_usd <= 0.0 {
+            bail!("Area and price must be greater than zero");
+        }
+
+        houses.push(house);
+    }
+
+    if houses.len() < 10 {
+        bail!(
+            "Dataset must contain at least 10 valid records; found {}",
+            houses.len()
+        );
+    }
+
+    Ok(houses)
+}
+```
+
+### Matrix Construction (Lines 136-153)
+
+```rust
+fn make_feature_matrix(
+    houses: &[House],
+    scaler: &StandardScaler,
+) -> Result<Array2<f64>> {
+    let mut values = Vec::with_capacity(houses.len() * FEATURE_COUNT);
+
+    for house in houses {
+        let normalized = scaler.transform(&house.features());
+        values.extend_from_slice(&normalized);
+    }
+
+    Array2::from_shape_vec((houses.len(), FEATURE_COUNT), values)
+        .context("Could not construct feature matrix")
+}
+
+fn make_target_vector(houses: &[House]) -> Array1<f64> {
+    Array1::from_iter(houses.iter().map(|house| house.price_usd))
+}
+```
+
+- **Lines 136-149**: Apply scaler to each house's features, build normalized feature matrix
+- **Lines 151-153**: Extract prices as target vector
+
+### Regression Metrics (Lines 155-194)
+
+```rust
+fn calculate_mae(actual: &Array1<f64>, predicted: &Array1<f64>) -> f64 {
+    actual
+        .iter()
+        .zip(predicted.iter())
+        .map(|(actual, predicted)| (actual - predicted).abs())
+        .sum::<f64>()
+        / actual.len() as f64
+}
+
+fn calculate_rmse(actual: &Array1<f64>, predicted: &Array1<f64>) -> f64 {
+    let mean_squared_error = actual
+        .iter()
+        .zip(predicted.iter())
+        .map(|(actual, predicted)| (actual - predicted).powi(2))
+        .sum::<f64>()
+        / actual.len() as f64;
+
+    mean_squared_error.sqrt()
+}
+
+fn calculate_r2(actual: &Array1<f64>, predicted: &Array1<f64>) -> f64 {
+    let mean = actual.sum() / actual.len() as f64;
+
+    let total_sum_squares = actual
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>();
+
+    let residual_sum_squares = actual
+        .iter()
+        .zip(predicted.iter())
+        .map(|(actual, predicted)| (actual - predicted).powi(2))
+        .sum::<f64>();
+
+    if total_sum_squares == 0.0 {
+        return 0.0;
+    }
+
+    1.0 - residual_sum_squares / total_sum_squares
+}
+```
+
+- **MAE**: Mean Absolute Error = average of |actual - predicted|
+- **RMSE**: Root Mean Square Error = sqrt(average of (actual - predicted)²)
+- **R²**: 1 - (SS_res / SS_tot) where SS_res is residual sum of squares, SS_tot is total sum of squares
+
+### New Prediction Helper (Lines 196-214)
+
+```rust
+fn predict_house_price(
+    model: &linfa_linear::FittedLinearRegression<f64>,
+    scaler: &StandardScaler,
+    features: [f64; FEATURE_COUNT],
+) -> Result<f64> {
+    let normalized = scaler.transform(&features);
+
+    let input = Array2::from_shape_vec(
+        (1, FEATURE_COUNT),
+        normalized.to_vec(),
+    )?;
+
+    let prediction = model.predict(&input);
+
+    prediction
+        .get(0)
+        .copied()
+        .context("Model did not return a prediction")
+}
+```
+
+### Main Function (Lines 216-322)
+
+```rust
+fn main() -> Result<()> {
+    println!("======================================");
+    println!("      Rust House Price Prediction");
+    println!("      Linear Regression + Linfa");
+    println!("======================================\n");
+
+    if !Path::new(DATASET_PATH).exists() {
+        bail!(
+            "Dataset not found: {DATASET_PATH}\n\
+             Create data/houses.csv using the supplied example dataset."
+        );
+    }
+
+    // 1. Load data.
+    let mut houses = load_dataset(DATASET_PATH)?;
+
+    println!("Dataset: {DATASET_PATH}");
+    println!("Total houses: {}", houses.len());
+
+    // 2. Shuffle deterministically for reproducible results.
+    let mut rng = StdRng::seed_from_u64(42);
+    houses.shuffle(&mut rng);
+
+    // 3. Split into training and test datasets.
+    let train_size = ((houses.len() as f64) * TRAIN_RATIO) as usize;
+
+    if train_size == 0 || train_size >= houses.len() {
+        bail!("Unable to split the dataset into training and test sets");
+    }
+
+    let train_houses = &houses[..train_size];
+    let test_houses = &houses[train_size..];
+
+    println!("Training records: {}", train_houses.len());
+    println!("Test records: {}\n", test_houses.len());
+
+    // 4. Fit normalization using training records only.
+    let scaler = StandardScaler::fit(train_houses)?;
+
+    // 5. Convert data into matrices and target vectors.
+    let x_train = make_feature_matrix(train_houses, &scaler)?;
+    let y_train = make_target_vector(train_houses);
+
+    let x_test = make_feature_matrix(test_houses, &scaler)?;
+    let y_test = make_target_vector(test_houses);
+
+    let train_dataset = Dataset::new(x_train, y_train);
+
+    // 6. Train linear regression.
+    println!("Training Linear Regression...");
+
+    let model = LinearRegression::default()
+        .fit(&train_dataset)
+        .context("Could not train the regression model")?;
+
+    println!("Training complete.\n");
+
+    // 7. Evaluate on unseen test records.
+    let predictions = model.predict(&x_test);
+
+    let mae = calculate_mae(&y_test, &predictions);
+    let rmse = calculate_rmse(&y_test, &predictions);
+    let r2 = calculate_r2(&y_test, &predictions);
+
+    println!("============== Evaluation ==============");
+    println!("MAE:  ${mae:.2}");
+    println!("RMSE: ${rmse:.2}");
+    println!("R²:   {r2:.4}");
+    println!("========================================\n");
+
+    println!("Test-set predictions:");
+    println!(
+        "{:<12} {:<15} {:<15}",
+        "Actual", "Predicted", "Absolute Error"
+    );
+
+    for (actual, predicted) in y_test.iter().zip(predictions.iter()) {
+        println!(
+            "${:<11.2} ${:<14.2} ${:<14.2}",
+            actual,
+            predicted,
+            (actual - predicted).abs()
+        );
+    }
+
+    // 8. Predict the price of a new example house.
+    let example = [
+        1800.0, // Area in square feet.
+        3.0,    // Bedrooms.
+        2.0,    // Bathrooms.
+        5.0,    // Age in years.
+        4.0,    // Distance from city center in kilometers.
+    ];
+
+    let estimated_price = predict_house_price(&model, &scaler, example)?;
+
+    println!("\n============== New Prediction ==============");
+    println!("Area:          {:.0} sq ft", example[0]);
+    println!("Bedrooms:      {:.0}", example[1]);
+    println!("Bathrooms:     {:.0}", example[2]);
+    println!("Age:           {:.0} years", example[3]);
+    println!("Distance:      {:.0} km", example[4]);
+    println!("--------------------------------------------");
+    println!("Estimated price: ${estimated_price:.2}");
+    println!("============================================");
+
+    Ok(())
+}
+```
+
+**Key Steps:**
+1. **Lines 216-227**: Verify dataset exists
+2. **Lines 229-233**: Load dataset
+3. **Lines 235-237**: Shuffle with seed 42
+4. **Lines 239-250**: 80/20 split
+5. **Line 253**: **Critical** - Fit scaler on TRAINING data only (no data leakage)
+5. **Lines 256-262**: Build normalized matrices for train and test
+6. **Lines 264-269**: Train LinearRegression (closed-form solution)
+7. **Lines 273-284**: Evaluate with MAE, RMSE, R²
+8. **Lines 286-299**: Print per-sample predictions with absolute error
+9. **Lines 301-320**: Predict on new house example
+
+## Expected Output
+
+The program will output evaluation metrics including:
+- **MAE** (Mean Absolute Error) - Average absolute difference between predicted and actual values
+- **RMSE** (Root Mean Square Error) - Square root of average squared differences
+- **R²** (Coefficient of Determination) - Proportion of variance explained by the model
+- Per-sample predictions with actual vs predicted prices
+- New example house price prediction

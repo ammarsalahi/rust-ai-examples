@@ -1,0 +1,117 @@
+---
+title: Project Overview
+description: Overview of the Rust AI Examples project
+---
+
+# Project Overview
+
+## rust-ai-examples 🦀🤖
+
+This project is designed to assist those who wish to work with the Rust language in the field of artificial intelligence and its sub-disciplines.
+
+## Goals
+
+- Provide practical, runnable examples of AI/ML in Rust
+- Demonstrate popular Rust ML libraries (Candle, Linfa, Burn, etc.)
+- Cover various domains: NLP, Computer Vision, Traditional ML, Deep Learning
+- Serve as a learning resource for Rust developers interested in AI
+
+## Libraries Used
+
+| Library | Purpose | Examples |
+|---------|---------|----------|
+| [Candle](https://github.com/huggingface/candle) | Tensor operations, neural networks | Text Classification, Sentiment Analysis, OCR, Image Classification |
+| [Linfa](https://github.com/rust-ml/linfa) | Classical ML algorithms | KNN, Decision Tree, Linear Regression, Language Detection |
+| [Tokenizers](https://github.com/huggingface/tokenizers) | Text tokenization | Text Classification, Sentiment Analysis |
+| [Hugging Face Hub](https://huggingface.co/docs/hub) | Model hosting | Sentiment Analysis, OCR, Image Classification |
+
+## Example Categories
+
+### Machine Learning (Traditional)
+- **Decision Tree Classifier** - Loan approval prediction
+- **House Price Prediction** - Linear regression
+- **KNN Classifier** - Iris dataset classification
+
+### Deep Learning
+- **Image Classification** - ResNet-18 on ImageNet
+- **OCR** - TrOCR for text recognition
+
+### Natural Language Processing
+- **Keyword Extraction** - TF-IDF based extraction
+- **Language Detection** - Character n-gram features
+- **Sentiment Analysis** - DistilBERT for sentiment
+- **Text Classification** - BERT for custom datasets
+- **Email Spam Classification** - Transformer-based spam detection
+
+## Repository Structure
+
+```text
+rust-ai-examples/
+├── examples/              # All example projects (standalone Cargo crates)
+│   ├── OCR/
+│   ├── decision-tree-classifier/
+│   ├── email-spam-classification/
+│   ├── house-price-prediction/
+│   ├── image-classification/
+│   ├── keyword-extraction/
+│   ├── knn-classifier/
+│   ├── language-detection/
+│   ├── sentiment-analysis/
+│   └── text-classification/
+├── src/content/docs/      # Documentation content (this site)
+├── public/                # Static assets
+├── package.json           # Node.js dependencies
+├── astro.config.mjs       # Astro configuration
+├── tsconfig.json          # TypeScript configuration
+├── Cargo.toml             # (Not at root - each example has its own)
+└── README.md              # Project README
+```
+
+## Anatomy of an Example
+
+Every example is an independent Cargo crate. They share a common shape, but the number of
+modules and required assets varies:
+
+```text
+example-name/
+├── Cargo.toml               # Its own manifest and dependencies
+├── src/
+│   ├── main.rs              # Entry point (usually the whole pipeline)
+│   ├── model.rs             # Optional: model/classifier code
+│   ├── dataset.rs           # Optional: data loading
+│   └── ...                  # Optional: preprocessing, downloader
+├── data/                    # Optional: committed datasets
+└── models/                  # Optional: model files (committed or downloaded)
+```
+
+| Example | Source files | Requires |
+|---------|--------------|----------|
+| [Text Classification](/nlp/text-classification/) | `src/main.rs` | Local `models/` BERT checkpoint |
+| [Sentiment Analysis](/nlp/sentiment-analysis/) | `src/main.rs` | Downloads `models/` from Hugging Face |
+| [Email Spam Classification](/nlp/email-spam-classification/) | _(none yet)_ | BERT assets present; source missing |
+| [Language Detection](/nlp/language-detection/) | `src/{main,model,dataset}.rs` | `data/languages.json` |
+| [Keyword Extraction](/nlp/keyword-extraction/) | `src/main.rs` | `.txt` files in `documents/` |
+| [KNN Classifier](/machine-learning/knn-classifier/) | `src/main.rs` | `data/iris.csv` |
+| [Decision Tree Classifier](/machine-learning/decision-tree-classifier/) | `src/main.rs` | `data/loans.csv` |
+| [House Price Prediction](/machine-learning/house-price-prediction/) | `src/main.rs` | `data/house.csv` |
+| [Image Classification](/deep-learning/image-classification/) | `src/{main,model,preprocessing,downloader}.rs` | Downloads `models/` on first run |
+| [OCR](/deep-learning/ocr/) | `src/{main,image_processor}.rs` | Download helpers only; inference missing |
+
+## Completion Status
+
+| Example | Runnable? | Notes |
+|---------|-----------|-------|
+| Decision Tree Classifier | ✅ Yes | Trains and evaluates on the committed CSV |
+| House Price Prediction | ✅ Yes | Trains and evaluates on the committed CSV |
+| KNN Classifier | ✅ Yes | Hand-written KNN with full metrics |
+| Language Detection | ✅ Yes | Trains on `languages.json`, then interactive |
+| Keyword Extraction | ✅ Yes | Reads `documents/*.txt` |
+| Sentiment Analysis | ✅ Yes | Downloads DistilBERT, then predict/evaluate |
+| Text Classification | ✅ Yes | Trains a linear head on a local BERT |
+| Image Classification | ✅ Yes | Downloads ResNet-18, then classifies an image |
+| Email Spam Classification | ❌ No | Assets only; no `src/` yet |
+| OCR | ❌ No | No `fn main`; inference not implemented |
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit issues or pull requests.

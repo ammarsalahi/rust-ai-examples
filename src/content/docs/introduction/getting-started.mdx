@@ -1,0 +1,70 @@
+---
+title: Getting Started
+description: How to run the Rust AI examples
+---
+
+# Getting Started
+
+This repository contains a collection of Rust AI examples demonstrating various machine learning, deep learning, and natural language processing techniques.
+
+## Prerequisites
+
+- [Rust](https://www.rust-lang.org/tools/install) (latest stable version)
+- [Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html) (comes with Rust)
+
+## Running Examples
+
+Each example is a standalone Cargo project located in the `examples/` directory.
+
+```bash
+# Navigate to an example directory
+cd examples/<example-name>
+
+# Run the example
+cargo run
+```
+
+### Available Examples
+
+| Example | Category | Status | Requires |
+|---------|----------|--------|----------|
+| [Text Classification](/nlp/text-classification/) | NLP | ✅ Runnable | Local `models/` BERT checkpoint |
+| [Sentiment Analysis](/nlp/sentiment-analysis/) | NLP | ✅ Runnable | Internet (first run downloads model) |
+| [Language Detection](/nlp/language-detection/) | NLP | ✅ Runnable | `data/languages.json` |
+| [Keyword Extraction](/nlp/keyword-extraction/) | NLP | ✅ Runnable | `.txt` files in `documents/` |
+| [Email Spam Classification](/nlp/email-spam-classification/) | NLP | ⚠️ Incomplete | Assets only; no source code yet |
+| [KNN Classifier](/machine-learning/knn-classifier/) | ML | ✅ Runnable | `data/iris.csv` |
+| [Decision Tree Classifier](/machine-learning/decision-tree-classifier/) | ML | ✅ Runnable | `data/loans.csv` |
+| [House Price Prediction](/machine-learning/house-price-prediction/) | ML | ✅ Runnable | `data/house.csv` |
+| [Image Classification](/deep-learning/image-classification/) | DL | ✅ Runnable | Internet (first run downloads model) + an image |
+| [OCR](/deep-learning/ocr/) | DL | ⚠️ Incomplete | No `fn main`; inference not implemented |
+
+:::note
+Each example page contains its own **Project Structure**, **Dataset Format**, and a
+**line-by-line code walkthrough**. Start from the [Project Overview](/introduction/overview/)
+for the overall layout.
+:::
+
+### Adding your own data
+
+Most examples read a fixed path relative to their own directory, so the simplest way to try
+your own data is to replace the committed file (keeping the same columns). Model-based examples
+either use a committed `models/` directory or download it on first run.
+
+## Documentation
+
+This documentation site is built with [Astro Starlight](https://starlight.astro.build/). To run it locally:
+
+```bash
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+
+# Build for production
+npm run build
+
+# Preview production build
+npm run preview
+```

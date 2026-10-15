@@ -1,0 +1,410 @@
+---
+title: دسته‌بندی درخت تصمیم
+description: پیش‌بینی تأیید وام با استفاده از درخت‌های تصمیم به کمک Linfa
+---
+
+# دسته‌بندی درخت تصمیم
+
+## مرور کلی
+
+این مثال پیش‌بینی تأیید وام را با استفاده از درخت‌های تصمیم و همراه با معیارهای ارزیابی به کمک [Linfa](https://github.com/rust-ml/linfa) نشان می‌دهد.
+
+## کد منبع
+
+[examples/decision-tree-classifier/src/main.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/decision-tree-classifier/src/main.rs)
+
+## ساختار پروژه
+
+```text
+examples/decision-tree-classifier/
+├── Cargo.toml                 # Crate manifest and dependencies
+├── src/
+│   └── main.rs                # Whole example: data, training, evaluation, CLI (263 lines)
+└── data/
+    └── loans.csv              # Loan records with a header row
+```
+
+| مسیر | نقش |
+|------|------|
+| `Cargo.toml` | کریت `decision-tree-classifier` و وابستگی‌های آن را تعریف می‌کند |
+| `src/main.rs` | همه‌چیز: بارگذاری CSV، اعتبارسنجی، تقسیم آموزش/آزمون، مدل، معیارها |
+| `data/loans.csv` | ۴ ویژگی عددی + هدف دودویی `loan_approved` |
+
+## وابستگی‌ها
+
+| کریت | نسخه | کاربرد |
+|-------|---------|---------|
+| `anyhow` | 1 | انتشار خطا و پیام‌های `Context` |
+| `csv` | 1 | واکاوی `loans.csv` و تبدیل آن به یک ساختار |
+| `linfa` | 0.8.1 | رابط‌های `Dataset`، `Fit` و `Predict` |
+| `linfa-trees` | 0.8.1 | یادگیرنده `DecisionTree` |
+| `ndarray` | 0.16 | ماتریس‌های ویژگی و هدف `Array1`/`Array2` |
+| `rand` | 0.8 | درهم‌آمیختن با دانه (seed) برای تقسیمی قابل تکرار |
+| `serde` | 1 | `Deserialize` برای ساختار سطر CSV |
+
+## قالب مجموعه‌داده
+
+`data/loans.csv` یک سطر سرصفحه دارد و پس از آن در هر سطر یک وام قرار می‌گیرد:
+
+```csv
+credit_score,income_k,debt_ratio,employment_years,loan_approved
+780,120,0.15,12,1
+750,100,0.20,10,1
+720,90,0.25,8,1
+```
+
+- `credit_score` — امتیاز به سبک FICO (نامنفی).
+- `income_k` — درآمد سالانه بر حسب هزار (دلار).
+- `debt_ratio` — نسبت بدهی به درآمد در بازه `[0, 1]`.
+- `employment_years` — سال‌های اشتغال (نامنفی).
+- `loan_approved` — هدف: `1` به‌معنای تأییدشده و `0` به‌معنای ردشده.
+
+## الگوریتم
+
+درخت‌های تصمیم یک روش یادگیری تحت نظارت ناپارامتری هستند که برای دسته‌بندی و رگرسیون به کار می‌روند. هدف، ساخت مدلی است که مقدار یک متغیر هدف را با یادگیری قواعد تصمیم ساده‌ای که از ویژگی‌های داده استنتاج می‌شوند، پیش‌بینی کند.
+
+## جزئیات پیاده‌سازی
+
+- **کتابخانه**: Linfa
+- **مجموعه‌داده**: مجموعه‌داده تأیید وام (CSV با ۴ ویژگی + هدف دودویی)
+- **وظیفه**: دسته‌بندی دودویی (تأییدشده/ردشده)
+- **ارزیابی**: دقت (Accuracy)، صحت (Precision)، فراخوانی (Recall)، امتیاز F1، ماتریس درهم‌ریختگی
+
+## اجرای مثال
+
+```bash
+cd examples/decision-tree-classifier
+cargo run
+```
+
+## بررسی کد (خط به خط)
+
+### واردکردن‌ها و ثابت‌ها (خطوط ۱ تا ۱۷)
+
+```rust
+use anyhow::{bail, Context, Result};
+use linfa::prelude::{Fit, Predict};
+use linfa::Dataset;
+use linfa_trees::DecisionTree;
+use ndarray::{Array1, Array2};
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
+use rand::SeedableRng;
+use serde::Deserialize;
+use std::fs::File;
+use std::path::Path;
+
+const DATASET_PATH: &str = "data/loans.csv";
+const FEATURE_COUNT: usize = 4;
+const TRAIN_RATIO: f64 = 0.8;
+const MAX_TREE_DEPTH: usize = 5;
+```
+
+- **خطوط ۱ تا ۱۱**: واردکردن کریت‌های موردنیاز - `anyhow` برای مدیریت خطا، `linfa` برای یادگیری ماشین، `linfa_trees` برای DecisionTree، `ndarray` برای آرایه‌های nبعدی، `rand` برای درهم‌آمیختن قابل تکرار و `serde` برای واکاوی CSV
+- **خطوط ۱۳ تا ۱۷**: ثابت‌های پیکربندی - مسیر مجموعه‌داده، ۴ ویژگی (credit_score، income_k، debt_ratio، employment_years)، تقسیم ۸۰/۲۰ آموزش/آزمون و حداکثر عمق درخت برابر ۵
+
+### ساختارهای داده (خطوط ۱۸ تا ۳۶)
+
+```rust
+#[derive(Debug, Deserialize, Clone)]
+struct LoanRecord {
+    credit_score: f64,
+    income_k: f64,
+    debt_ratio: f64,
+    employment_years: f64,
+    loan_approved: usize,
+}
+
+impl LoanRecord {
+    fn features(&self) -> [f64; FEATURE_COUNT] {
+        [
+            self.credit_score,
+            self.income_k,
+            self.debt_ratio,
+            self.employment_years,
+        ]
+    }
+}
+```
+
+- **خطوط ۱۸ تا ۲۵**: ساختار `LoanRecord` متناظر با ستون‌های CSV - ۴ ویژگی + برچسب هدف
+- **خطوط ۲۷ تا ۳۶**: متدی برای استخراج ویژگی‌ها به‌صورت آرایه‌ای با اندازه ثابت، برای سازگاری با ndarray
+
+### بارگذاری مجموعه‌داده (خطوط ۳۸ تا ۷۹)
+
+```rust
+fn load_dataset(path: &str) -> Result<Vec<LoanRecord>> {
+    let file = File::open(path).with_context(|| format!("Could not open dataset: {path}"))?;
+
+    let mut reader = csv::Reader::from_reader(file);
+    let mut records = Vec::new();
+
+    for result in reader.deserialize::<LoanRecord>() {
+        let record = result.context("Could not parse CSV record")?;
+
+        let features = record.features();
+
+        if features.iter().any(|value| !value.is_finite()) {
+            bail!("Dataset contains a non-finite feature value");
+        }
+
+        if record.credit_score < 0.0
+            || record.income_k < 0.0
+            || !(0.0..=1.0).contains(&record.debt_ratio)
+            || record.employment_years < 0.0
+        {
+            bail!("Dataset contains an invalid feature value");
+        }
+
+        if record.loan_approved > 1 {
+            bail!("loan_approved must be 0 or 1");
+        }
+
+        records.push(record);
+    }
+
+    if records.len() < 10 {
+        bail!("At least 10 records are required; found {}", records.len());
+    }
+
+    if !records.iter().any(|record| record.loan_approved == 0)
+        || !records.iter().any(|record| record.loan_approved == 1)
+    {
+        bail!("Dataset must contain both classes: 0 and 1");
+    }
+
+    Ok(records)
+}
+```
+
+- **خطوط ۳۸ تا ۴۲**: باز کردن فایل CSV با مدیریت خطای آگاه به زمینه (context)
+- **خطوط ۴۴ تا ۶۶**: واکاوی هر سطر و اعتبارسنجی متناهی‌بودن همه ویژگی‌ها و قرار داشتن آن‌ها در بازه‌های مجاز
+- **خطوط ۶۸ تا ۷۶**: اعتبارسنجی حداقل اندازه مجموعه‌داده (۱۰) و وجود هر دو کلاس (۰ و ۱)
+
+### ساخت ماتریس ویژگی/هدف (خطوط ۸۱ تا ۹۳)
+
+```rust
+fn build_features(records: &[LoanRecord]) -> Result<Array2<f64>> {
+    let values: Vec<f64> = records
+        .iter()
+        .flat_map(|record| record.features())
+        .collect();
+
+    Array2::from_shape_vec((records.len(), FEATURE_COUNT), values)
+        .context("Could not construct feature matrix")
+}
+
+fn build_targets(records: &[LoanRecord]) -> Array1<usize> {
+    Array1::from_iter(records.iter().map(|record| record.loan_approved))
+}
+```
+
+- **خطوط ۸۱ تا ۸۹**: تخت‌کردن همه ویژگی‌ها در یک بردار واحد و تغییر شکل آن به ماتریس (n_samples, 4)
+- **خطوط ۹۱ تا ۹۳**: استخراج برچسب‌های هدف در یک آرایه یک‌بعدی
+
+### معیارهای ارزیابی (خطوط ۹۵ تا ۱۳۹)
+
+```rust
+fn accuracy(actual: &Array1<usize>, predicted: &Array1<usize>) -> f64 {
+    if actual.is_empty() || actual.len() != predicted.len() {
+        return 0.0;
+    }
+
+    let correct = actual
+        .iter()
+        .zip(predicted.iter())
+        .filter(|(actual, predicted)| actual == predicted)
+        .count();
+
+    correct as f64 / actual.len() as f64
+}
+
+fn print_confusion_matrix(actual: &Array1<usize>, predicted: &Array1<usize>) {
+    let mut true_negative = 0;
+    let mut false_positive = 0;
+    let mut false_negative = 0;
+    let mut true_positive = 0;
+
+    for (&actual, &predicted) in actual.iter().zip(predicted.iter()) {
+        match (actual, predicted) {
+            (0, 0) => true_negative += 1,
+            (0, 1) => false_positive += 1,
+            (1, 0) => false_negative += 1,
+            (1, 1) => true_positive += 1,
+            _ => {}
+        }
+    }
+
+    println!("\nConfusion Matrix");
+    println!("Rows = actual class, columns = predicted class");
+    println!();
+    println!("                 Predicted 0    Predicted 1");
+    println!("Actual 0         {:<14} {}", true_negative, false_positive);
+    println!("Actual 1         {:<14} {}", false_negative, true_positive);
+}
+
+fn class_name(class: usize) -> &'static str {
+    match class {
+        0 => "Rejected",
+        1 => "Approved",
+        _ => "Unknown",
+    }
+}
+```
+
+- **خطوط ۹۵ تا ۱۰۷**: محاسبه دقت به‌صورت نسبت پیش‌بینی‌های درست به کل
+- **خطوط ۱۰۹ تا ۱۳۱**: محاسبه و چاپ ماتریس درهم‌ریختگی ۲×۲ (TN، FP، FN، TP)
+- **خطوط ۱۳۳ تا ۱۳۹**: تابع کمکی برای تبدیل شناسه‌های کلاس به نام‌های خوانا برای انسان
+
+### تابع کمکی پیش‌بینی جدید (خطوط ۱۴۱ تا ۱۵۳)
+
+```rust
+fn predict_new_loan(
+    model: &linfa_trees::DecisionTree<f64, usize>,
+    features: [f64; FEATURE_COUNT],
+) -> Result<usize> {
+    let input = Array2::from_shape_vec((1, FEATURE_COUNT), features.to_vec())?;
+
+    let predictions = model.predict(&input);
+
+    predictions
+        .get(0)
+        .copied()
+        .context("Model did not return a prediction")
+}
+```
+
+- **خطوط ۱۴۱ تا ۱۵۳**: بسته‌بندی یک پیش‌بینی واحد در ماتریسی ۱×۴، اجرای استنتاج و استخراج نتیجه
+
+### تابع main (خطوط ۱۵۵ تا ۲۶۲)
+
+```rust
+fn main() -> Result<()> {
+    println!("=======================================");
+    println!("      Rust Decision Tree Classifier");
+    println!("=======================================\n");
+
+    if !Path::new(DATASET_PATH).exists() {
+        bail!(
+            "Dataset not found: {DATASET_PATH}\n\
+             Create data/loans.csv using the supplied dataset."
+        );
+    }
+
+    // 1. Load dataset.
+    let mut records = load_dataset(DATASET_PATH)?;
+
+    println!("Dataset: {DATASET_PATH}");
+    println!("Total records: {}", records.len());
+
+    // 2. Shuffle the data reproducibly.
+    let mut rng = StdRng::seed_from_u64(42);
+    records.shuffle(&mut rng);
+
+    // 3. Split into training and test sets.
+    let train_size = ((records.len() as f64) * TRAIN_RATIO) as usize;
+
+    if train_size == 0 || train_size >= records.len() {
+        bail!("Could not split dataset into training and test sets");
+    }
+
+    let train_records = &records[..train_size];
+    let test_records = &records[train_size..];
+
+    println!("Training records: {}", train_records.len());
+    println!("Test records:     {}\n", test_records.len());
+
+    // 4. Build matrices.
+    let x_train = build_features(train_records)?;
+    let y_train = build_targets(train_records);
+
+    let x_test = build_features(test_records)?;
+    let y_test = build_targets(test_records);
+
+    let train_dataset = Dataset::new(x_train, y_train);
+
+    // 5. Train the decision tree.
+    println!("Training decision tree...");
+
+    let model = DecisionTree::params()
+        .max_depth(Some(MAX_TREE_DEPTH))
+        .fit(&train_dataset)
+        .context("Failed to train decision tree")?;
+
+    println!("Training completed.");
+    println!("Maximum tree depth: {}\n", MAX_TREE_DEPTH);
+
+    // 6. Evaluate on unseen test records.
+    let predictions = model.predict(&x_test);
+
+    let score = accuracy(&y_test, &predictions);
+
+    println!("============== Evaluation ==============");
+    println!("Accuracy: {:.2}%", score * 100.0);
+    println!("========================================");
+
+    print_confusion_matrix(&y_test, &predictions);
+
+    // 7. Print test predictions.
+    println!("\nTest-set predictions:");
+    println!("{:<12} {:<14} {:<14}", "Actual", "Predicted", "Result");
+
+    for (&actual, &predicted) in y_test.iter().zip(predictions.iter()) {
+        let result = if actual == predicted {
+            "Correct"
+        } else {
+            "Incorrect"
+        };
+
+        println!(
+            "{:<12} {:<14} {}",
+            class_name(actual),
+            class_name(predicted),
+            result
+        );
+    }
+
+    // 8. Classify new examples.
+    let examples = [
+        ("High credit score", [760.0, 110.0, 0.18, 9.0]),
+        ("Low credit score", [540.0, 30.0, 0.75, 1.0]),
+    ];
+
+    println!("\n============== New Predictions ==============");
+
+    for (description, features) in examples {
+        let prediction = predict_new_loan(&model, features)?;
+
+        println!("\nExample: {description}");
+        println!("Credit score:       {:.0}", features[0]);
+        println!("Annual income:      ${:.0}K", features[1]);
+        println!("Debt-to-income:     {:.0}%", features[2] * 100.0);
+        println!("Employment:         {:.0} years", features[3]);
+        println!("Predicted class:    {}", class_name(prediction));
+    }
+
+    println!("\n=============================================");
+    println!("Finished.");
+
+    Ok(())
+}
+```
+
+**گام‌های کلیدی:**
+1. **خطوط ۱۵۵ تا ۱۶۵**: چاپ سرصفحه و بررسی وجود مجموعه‌داده
+2. **خطوط ۱۶۷ تا ۱۷۱**: بارگذاری و اعتبارسنجی مجموعه‌داده
+3. **خطوط ۱۷۳ تا ۱۷۵**: درهم‌آمیختن با دانه ثابت (۴۲) برای تکرارپذیری
+4. **خطوط ۱۷۷ تا ۱۸۸**: تقسیم ۸۰/۲۰ آموزش/آزمون
+5. **خطوط ۱۹۰ تا ۱۹۷**: ساخت ماتریس‌های ویژگی و بردارهای هدف
+6. **خطوط ۱۹۹ تا ۲۰۸**: آموزش DecisionTree با max_depth=5 و با استفاده از الگوی سازنده (builder) در Linfa
+7. **خطوط ۲۱۰ تا ۲۱۹**: ارزیابی روی مجموعه آزمون و چاپ دقت
+8. **خطوط ۲۲۱ تا ۲۳۸**: چاپ پیش‌بینی‌های تفصیلی هر نمونه همراه با برچسب‌های Correct/Incorrect
+9. **خطوط ۲۴۰ تا ۲۵۷**: پیش‌بینی روی دو نمونه مصنوعی جدید (امتیاز اعتباری بالا در مقابل پایین)
+
+## خروجی مورد انتظار
+
+برنامه معیارهای ارزیابی را چاپ می‌کند که شامل موارد زیر است:
+- درصد دقت
+- ماتریس درهم‌ریختگی (TN، FP، FN، TP)
+- پیش‌بینی‌های آزمون برای هر نمونه
+- پیش‌بینی نمونه‌های جدید همراه با مقادیر ویژگی‌ها و کلاس پیش‌بینی‌شده

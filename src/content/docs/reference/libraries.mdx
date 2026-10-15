@@ -1,0 +1,218 @@
+---
+title: Library Reference
+description: Reference documentation for libraries used in the examples
+---
+
+# Library Reference
+
+This page provides quick reference information for the main libraries used across the examples.
+
+## Candle
+
+**Repository**: [huggingface/candle](https://github.com/huggingface/candle)
+
+A minimalist ML framework for Rust with focus on performance and ease of use.
+
+### Key Crates
+
+| Crate | Purpose |
+|-------|---------|
+| `candle-core` | Core tensor operations, device management, autograd |
+| `candle-nn` | Neural network modules (layers, activations, etc.) |
+| `candle-transformers` | Pre-built transformer models (BERT, GPT, T5, etc.) |
+| `candle-examples` | Example utilities and helpers |
+
+### Common Patterns
+
+```rust
+// Device selection
+let device = Device::Cpu; // or Device::Cuda, Device::Metal
+
+// Tensor creation
+let tensor = Tensor::from_slice(&[1.0, 2.0, 3.0], (3,), &device)?;
+
+// Model loading
+let model = Model::load(&model_path, &device)?;
+```
+
+### Documentation
+
+- [API Docs](https://docs.rs/candle-core)
+- [Examples](https://github.com/huggingface/candle/tree/main/candle-examples)
+
+---
+
+## Linfa
+
+**Repository**: [rust-ml/linfa](https://github.com/rust-ml/linfa)
+
+A toolkit for classical machine learning in Rust, similar to scikit-learn.
+
+### Key Crates
+
+| Crate | Purpose |
+|-------|---------|
+| `linfa` | Core traits and data structures |
+| `linfa-trees` | Decision trees, random forests |
+| `linfa-linear` | Linear regression, logistic regression |
+| `linfa-knn` | K-nearest neighbors |
+| `linfa-clustering` | K-means, DBSCAN |
+| `linfa-preprocessing` | Scaling, encoding, feature selection |
+
+### Common Patterns
+
+```rust
+// Dataset creation
+let (train, test) = dataset.split_with_ratio(0.8);
+
+// Model training
+let model = DecisionTree::params()
+    .max_depth(Some(5))
+    .fit(&train)?;
+
+// Prediction
+let predictions = model.predict(&test);
+
+// Evaluation
+let cm = predictions.confusion_matrix(&test)?;
+```
+
+### Documentation
+
+- [API Docs](https://docs.rs/linfa)
+- [Guide](https://rust-ml.github.io/linfa/)
+
+---
+
+## Tokenizers
+
+**Repository**: [huggingface/tokenizers](https://github.com/huggingface/tokenizers)
+
+Fast, state-of-the-art tokenizers optimized for research and production.
+
+### Key Types
+
+| Type | Purpose |
+|------|---------|
+| `Tokenizer` | Main tokenizer interface |
+| `Encoding` | Tokenized output (ids, tokens, offsets, etc.) |
+| `Model` | Tokenization model (BPE, WordPiece, etc.) |
+
+### Common Patterns
+
+```rust
+// Load tokenizer
+let tokenizer = Tokenizer::from_file("tokenizer.json")?;
+
+// Encode text
+let encoding = tokenizer.encode("Hello, world!", true)?;
+
+// Access results
+let ids = encoding.get_ids();
+let tokens = encoding.get_tokens();
+```
+
+### Documentation
+
+- [API Docs](https://docs.rs/tokenizers)
+- [Python Binding](https://github.com/huggingface/tokenizers/tree/main/bindings/python)
+
+---
+
+## Hugging Face Hub
+
+**Repository**: [huggingface/hf-hub](https://github.com/huggingface/hf-hub)
+
+Rust client for the Hugging Face Hub.
+
+### Key Functions
+
+| Function | Purpose |
+|----------|---------|
+| `api.model(id)` | Get model repository |
+| `api.dataset(id)` | Get dataset repository |
+| `repo.get(file)` | Download a file |
+| `repo.get_config()` | Get model config |
+
+### Common Patterns
+
+```rust
+let api = Api::new()?;
+let repo = api.model("bert-base-uncased".to_string());
+let config = repo.get_config()?;
+let model_file = repo.get("model.safetensors")?;
+```
+
+### Documentation
+
+- [API Docs](https://docs.rs/hf-hub)
+- [Hub Docs](https://huggingface.co/docs/hub)
+
+---
+
+## Image
+
+**Repository**: [image-rs/image](https://github.com/image-rs/image)
+
+Image processing library for Rust.
+
+### Key Types
+
+| Type | Purpose |
+|------|---------|
+| `DynamicImage` | Enum wrapping all image formats |
+| `ImageBuffer` | Typed image buffer |
+| `Pixel` | Pixel trait |
+
+### Common Patterns
+
+```rust
+// Load image
+let img = image::open("path/to/image.png")?;
+
+// Resize
+let resized = img.resize_exact(224, 224, FilterType::Triangle);
+
+// Convert to RGB
+let rgb = resized.to_rgb8();
+
+// Access pixels
+for pixel in rgb.pixels() {
+    // pixel is &Rgb<u8>
+}
+```
+
+### Documentation
+
+- [API Docs](https://docs.rs/image)
+
+---
+
+## Clap
+
+**Repository**: [clap-rs/clap](https://github.com/clap-rs/clap)
+
+Command line argument parser for Rust.
+
+### Common Patterns
+
+```rust
+#[derive(Parser)]
+struct Args {
+    #[arg(short, long)]
+    input: String,
+    
+    #[arg(short, long, default_value_t = 0.5)]
+    threshold: f32,
+}
+
+fn main() {
+    let args = Args::parse();
+    // use args.input, args.threshold
+}
+```
+
+### Documentation
+
+- [API Docs](https://docs.rs/clap)
+- [Tutorial](https://github.com/clap-rs/clap/blob/master/doc/tutorial.md)

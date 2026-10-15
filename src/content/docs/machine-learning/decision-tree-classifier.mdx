@@ -1,0 +1,410 @@
+---
+title: Decision Tree Classifier
+description: Loan approval prediction using decision trees with Linfa
+---
+
+# Decision Tree Classifier
+
+## Overview
+
+This example demonstrates loan approval prediction using decision trees with evaluation metrics using [Linfa](https://github.com/rust-ml/linfa).
+
+## Source Code
+
+[examples/decision-tree-classifier/src/main.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/decision-tree-classifier/src/main.rs)
+
+## Project Structure
+
+```text
+examples/decision-tree-classifier/
+├── Cargo.toml                 # Crate manifest and dependencies
+├── src/
+│   └── main.rs                # Whole example: data, training, evaluation, CLI (263 lines)
+└── data/
+    └── loans.csv              # Loan records with a header row
+```
+
+| Path | Role |
+|------|------|
+| `Cargo.toml` | Defines the `decision-tree-classifier` crate and its dependencies |
+| `src/main.rs` | Everything: CSV loading, validation, train/test split, model, metrics |
+| `data/loans.csv` | 4 numeric features + a binary `loan_approved` target |
+
+## Dependencies
+
+| Crate | Version | Purpose |
+|-------|---------|---------|
+| `anyhow` | 1 | Error propagation and `Context` messages |
+| `csv` | 1 | Deserializing `loans.csv` into a struct |
+| `linfa` | 0.8.1 | `Dataset`, `Fit` and `Predict` traits |
+| `linfa-trees` | 0.8.1 | The `DecisionTree` learner |
+| `ndarray` | 0.16 | `Array1`/`Array2` feature and target matrices |
+| `rand` | 0.8 | Seeded shuffling for a reproducible split |
+| `serde` | 1 | `Deserialize` for the CSV row struct |
+
+## Dataset Format
+
+`data/loans.csv` has a header row followed by one loan per line:
+
+```csv
+credit_score,income_k,debt_ratio,employment_years,loan_approved
+780,120,0.15,12,1
+750,100,0.20,10,1
+720,90,0.25,8,1
+```
+
+- `credit_score` — FICO-style score (non-negative).
+- `income_k` — annual income in thousands.
+- `debt_ratio` — debt-to-income ratio in `[0, 1]`.
+- `employment_years` — years employed (non-negative).
+- `loan_approved` — target: `1` approved, `0` rejected.
+
+## Algorithm
+
+Decision Trees are a non-parametric supervised learning method used for classification and regression. The goal is to create a model that predicts the value of a target variable by learning simple decision rules inferred from the data features.
+
+## Implementation Details
+
+- **Library**: Linfa
+- **Dataset**: Loan approval dataset (CSV with 4 features + binary target)
+- **Task**: Binary classification (approved/rejected)
+- **Evaluation**: Accuracy, Precision, Recall, F1-score, Confusion Matrix
+
+## Running the Example
+
+```bash
+cd examples/decision-tree-classifier
+cargo run
+```
+
+## Code Walkthrough (Line by Line)
+
+### Imports and Constants (Lines 1-17)
+
+```rust
+use anyhow::{bail, Context, Result};
+use linfa::prelude::{Fit, Predict};
+use linfa::Dataset;
+use linfa_trees::DecisionTree;
+use ndarray::{Array1, Array2};
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
+use rand::SeedableRng;
+use serde::Deserialize;
+use std::fs::File;
+use std::path::Path;
+
+const DATASET_PATH: &str = "data/loans.csv";
+const FEATURE_COUNT: usize = 4;
+const TRAIN_RATIO: f64 = 0.8;
+const MAX_TREE_DEPTH: usize = 5;
+```
+
+- **Lines 1-11**: Import required crates - `anyhow` for error handling, `linfa` for ML, `linfa_trees` for DecisionTree, `ndarray` for n-dimensional arrays, `rand` for reproducible shuffling, `serde` for CSV deserialization
+- **Lines 13-17**: Configuration constants - dataset path, 4 features (credit_score, income_k, debt_ratio, employment_years), 80/20 train/test split, max tree depth of 5
+
+### Data Structures (Lines 18-36)
+
+```rust
+#[derive(Debug, Deserialize, Clone)]
+struct LoanRecord {
+    credit_score: f64,
+    income_k: f64,
+    debt_ratio: f64,
+    employment_years: f64,
+    loan_approved: usize,
+}
+
+impl LoanRecord {
+    fn features(&self) -> [f64; FEATURE_COUNT] {
+        [
+            self.credit_score,
+            self.income_k,
+            self.debt_ratio,
+            self.employment_years,
+        ]
+    }
+}
+```
+
+- **Lines 18-25**: `LoanRecord` struct matching CSV columns - 4 features + target label
+- **Lines 27-36**: Method to extract features as a fixed-size array for ndarray compatibility
+
+### Dataset Loading (Lines 38-79)
+
+```rust
+fn load_dataset(path: &str) -> Result<Vec<LoanRecord>> {
+    let file = File::open(path).with_context(|| format!("Could not open dataset: {path}"))?;
+
+    let mut reader = csv::Reader::from_reader(file);
+    let mut records = Vec::new();
+
+    for result in reader.deserialize::<LoanRecord>() {
+        let record = result.context("Could not parse CSV record")?;
+
+        let features = record.features();
+
+        if features.iter().any(|value| !value.is_finite()) {
+            bail!("Dataset contains a non-finite feature value");
+        }
+
+        if record.credit_score < 0.0
+            || record.income_k < 0.0
+            || !(0.0..=1.0).contains(&record.debt_ratio)
+            || record.employment_years < 0.0
+        {
+            bail!("Dataset contains an invalid feature value");
+        }
+
+        if record.loan_approved > 1 {
+            bail!("loan_approved must be 0 or 1");
+        }
+
+        records.push(record);
+    }
+
+    if records.len() < 10 {
+        bail!("At least 10 records are required; found {}", records.len());
+    }
+
+    if !records.iter().any(|record| record.loan_approved == 0)
+        || !records.iter().any(|record| record.loan_approved == 1)
+    {
+        bail!("Dataset must contain both classes: 0 and 1");
+    }
+
+    Ok(records)
+}
+```
+
+- **Lines 38-42**: Open CSV file with context-aware error handling
+- **Lines 44-66**: Deserialize each row, validate all features are finite and within valid ranges
+- **Lines 68-76**: Validate minimum dataset size (10) and presence of both classes (0 and 1)
+
+### Feature/Target Matrix Construction (Lines 81-93)
+
+```rust
+fn build_features(records: &[LoanRecord]) -> Result<Array2<f64>> {
+    let values: Vec<f64> = records
+        .iter()
+        .flat_map(|record| record.features())
+        .collect();
+
+    Array2::from_shape_vec((records.len(), FEATURE_COUNT), values)
+        .context("Could not construct feature matrix")
+}
+
+fn build_targets(records: &[LoanRecord]) -> Array1<usize> {
+    Array1::from_iter(records.iter().map(|record| record.loan_approved))
+}
+```
+
+- **Lines 81-89**: Flatten all features into a single vector and reshape to (n_samples, 4) matrix
+- **Lines 91-93**: Extract target labels into a 1D array
+
+### Evaluation Metrics (Lines 95-139)
+
+```rust
+fn accuracy(actual: &Array1<usize>, predicted: &Array1<usize>) -> f64 {
+    if actual.is_empty() || actual.len() != predicted.len() {
+        return 0.0;
+    }
+
+    let correct = actual
+        .iter()
+        .zip(predicted.iter())
+        .filter(|(actual, predicted)| actual == predicted)
+        .count();
+
+    correct as f64 / actual.len() as f64
+}
+
+fn print_confusion_matrix(actual: &Array1<usize>, predicted: &Array1<usize>) {
+    let mut true_negative = 0;
+    let mut false_positive = 0;
+    let mut false_negative = 0;
+    let mut true_positive = 0;
+
+    for (&actual, &predicted) in actual.iter().zip(predicted.iter()) {
+        match (actual, predicted) {
+            (0, 0) => true_negative += 1,
+            (0, 1) => false_positive += 1,
+            (1, 0) => false_negative += 1,
+            (1, 1) => true_positive += 1,
+            _ => {}
+        }
+    }
+
+    println!("\nConfusion Matrix");
+    println!("Rows = actual class, columns = predicted class");
+    println!();
+    println!("                 Predicted 0    Predicted 1");
+    println!("Actual 0         {:<14} {}", true_negative, false_positive);
+    println!("Actual 1         {:<14} {}", false_negative, true_positive);
+}
+
+fn class_name(class: usize) -> &'static str {
+    match class {
+        0 => "Rejected",
+        1 => "Approved",
+        _ => "Unknown",
+    }
+}
+```
+
+- **Lines 95-107**: Calculate accuracy as correct predictions / total
+- **Lines 109-131**: Compute and print 2x2 confusion matrix (TN, FP, FN, TP)
+- **Lines 133-139**: Helper to convert class IDs to human-readable names
+
+### New Prediction Helper (Lines 141-153)
+
+```rust
+fn predict_new_loan(
+    model: &linfa_trees::DecisionTree<f64, usize>,
+    features: [f64; FEATURE_COUNT],
+) -> Result<usize> {
+    let input = Array2::from_shape_vec((1, FEATURE_COUNT), features.to_vec())?;
+
+    let predictions = model.predict(&input);
+
+    predictions
+        .get(0)
+        .copied()
+        .context("Model did not return a prediction")
+}
+```
+
+- **Lines 141-153**: Wrap single prediction in a 1x4 matrix, run inference, extract result
+
+### Main Function (Lines 155-262)
+
+```rust
+fn main() -> Result<()> {
+    println!("=======================================");
+    println!("      Rust Decision Tree Classifier");
+    println!("=======================================\n");
+
+    if !Path::new(DATASET_PATH).exists() {
+        bail!(
+            "Dataset not found: {DATASET_PATH}\n\
+             Create data/loans.csv using the supplied dataset."
+        );
+    }
+
+    // 1. Load dataset.
+    let mut records = load_dataset(DATASET_PATH)?;
+
+    println!("Dataset: {DATASET_PATH}");
+    println!("Total records: {}", records.len());
+
+    // 2. Shuffle the data reproducibly.
+    let mut rng = StdRng::seed_from_u64(42);
+    records.shuffle(&mut rng);
+
+    // 3. Split into training and test sets.
+    let train_size = ((records.len() as f64) * TRAIN_RATIO) as usize;
+
+    if train_size == 0 || train_size >= records.len() {
+        bail!("Could not split dataset into training and test sets");
+    }
+
+    let train_records = &records[..train_size];
+    let test_records = &records[train_size..];
+
+    println!("Training records: {}", train_records.len());
+    println!("Test records:     {}\n", test_records.len());
+
+    // 4. Build matrices.
+    let x_train = build_features(train_records)?;
+    let y_train = build_targets(train_records);
+
+    let x_test = build_features(test_records)?;
+    let y_test = build_targets(test_records);
+
+    let train_dataset = Dataset::new(x_train, y_train);
+
+    // 5. Train the decision tree.
+    println!("Training decision tree...");
+
+    let model = DecisionTree::params()
+        .max_depth(Some(MAX_TREE_DEPTH))
+        .fit(&train_dataset)
+        .context("Failed to train decision tree")?;
+
+    println!("Training completed.");
+    println!("Maximum tree depth: {}\n", MAX_TREE_DEPTH);
+
+    // 6. Evaluate on unseen test records.
+    let predictions = model.predict(&x_test);
+
+    let score = accuracy(&y_test, &predictions);
+
+    println!("============== Evaluation ==============");
+    println!("Accuracy: {:.2}%", score * 100.0);
+    println!("========================================");
+
+    print_confusion_matrix(&y_test, &predictions);
+
+    // 7. Print test predictions.
+    println!("\nTest-set predictions:");
+    println!("{:<12} {:<14} {:<14}", "Actual", "Predicted", "Result");
+
+    for (&actual, &predicted) in y_test.iter().zip(predictions.iter()) {
+        let result = if actual == predicted {
+            "Correct"
+        } else {
+            "Incorrect"
+        };
+
+        println!(
+            "{:<12} {:<14} {}",
+            class_name(actual),
+            class_name(predicted),
+            result
+        );
+    }
+
+    // 8. Classify new examples.
+    let examples = [
+        ("High credit score", [760.0, 110.0, 0.18, 9.0]),
+        ("Low credit score", [540.0, 30.0, 0.75, 1.0]),
+    ];
+
+    println!("\n============== New Predictions ==============");
+
+    for (description, features) in examples {
+        let prediction = predict_new_loan(&model, features)?;
+
+        println!("\nExample: {description}");
+        println!("Credit score:       {:.0}", features[0]);
+        println!("Annual income:      ${:.0}K", features[1]);
+        println!("Debt-to-income:     {:.0}%", features[2] * 100.0);
+        println!("Employment:         {:.0} years", features[3]);
+        println!("Predicted class:    {}", class_name(prediction));
+    }
+
+    println!("\n=============================================");
+    println!("Finished.");
+
+    Ok(())
+}
+```
+
+**Key Steps:**
+1. **Lines 155-165**: Print header, verify dataset exists
+2. **Lines 167-171**: Load and validate dataset
+3. **Lines 173-175**: Shuffle with fixed seed (42) for reproducibility
+4. **Lines 177-188**: Split 80/20 train/test
+5. **Lines 190-197**: Build feature matrices and target vectors
+6. **Lines 199-208**: Train DecisionTree with max_depth=5 using Linfa's builder pattern
+7. **Lines 210-219**: Evaluate on test set, print accuracy
+8. **Lines 221-238**: Print detailed per-sample predictions with Correct/Incorrect labels
+9. **Lines 240-257**: Predict on two new synthetic examples (high vs low credit score)
+
+## Expected Output
+
+The program will output evaluation metrics including:
+- Accuracy percentage
+- Confusion Matrix (TN, FP, FN, TP)
+- Per-sample test predictions
+- New example predictions with feature values and predicted class

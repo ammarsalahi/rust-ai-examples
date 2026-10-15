@@ -1,0 +1,117 @@
+---
+title: مرور کلی پروژه
+description: مروری بر پروژه Rust AI Examples
+---
+
+# مرور کلی پروژه
+
+## rust-ai-examples 🦀🤖
+
+این پروژه برای کمک به کسانی طراحی شده است که می‌خواهند با زبان Rust در حوزهٔ هوش مصنوعی و زیرشاخه‌های آن کار کنند.
+
+## اهداف
+
+- ارائهٔ مثال‌های کاربردی و قابل‌اجرای هوش مصنوعی و یادگیری ماشین در Rust
+- معرفی کتابخانه‌های محبوب یادگیری ماشین در Rust (Candle، Linfa، Burn و غیره)
+- پوشش حوزه‌های گوناگون: پردازش زبان طبیعی، بینایی کامپیوتر، یادگیری ماشین سنتی و یادگیری عمیق
+- ایفای نقش به‌عنوان منبعی آموزشی برای توسعه‌دهندگان Rust علاقه‌مند به هوش مصنوعی
+
+## کتابخانه‌های استفاده‌شده
+
+| کتابخانه | هدف | مثال‌ها |
+|---------|---------|----------|
+| [Candle](https://github.com/huggingface/candle) | عملیات تنسوری، شبکه‌های عصبی | طبقه‌بندی متن، تحلیل احساسات، OCR، طبقه‌بندی تصویر |
+| [Linfa](https://github.com/rust-ml/linfa) | الگوریتم‌های یادگیری ماشین کلاسیک | KNN، درخت تصمیم، رگرسیون خطی، تشخیص زبان |
+| [Tokenizers](https://github.com/huggingface/tokenizers) | توکن‌سازی متن | طبقه‌بندی متن، تحلیل احساسات |
+| [Hugging Face Hub](https://huggingface.co/docs/hub) | میزبانی مدل | تحلیل احساسات، OCR، طبقه‌بندی تصویر |
+
+## دسته‌بندی مثال‌ها
+
+### یادگیری ماشین (سنتی)
+- **طبقه‌بند درخت تصمیم** - پیش‌بینی تأیید وام
+- **پیش‌بینی قیمت خانه** - رگرسیون خطی
+- **طبقه‌بند KNN** - طبقه‌بندی مجموعه‌دادهٔ Iris
+
+### یادگیری عمیق
+- **طبقه‌بندی تصویر** - ResNet-18 روی ImageNet
+- **OCR** - TrOCR برای تشخیص متن
+
+### پردازش زبان طبیعی
+- **استخراج کلیدواژه** - استخراج مبتنی بر TF-IDF
+- **تشخیص زبان** - ویژگی‌های n-gram نویسه‌ای
+- **تحلیل احساسات** - DistilBERT برای احساسات
+- **طبقه‌بندی متن** - BERT برای مجموعه‌داده‌های سفارشی
+- **طبقه‌بندی ایمیل هرزنامه** - تشخیص هرزنامه مبتنی بر ترنسفورمر
+
+## ساختار مخزن
+
+```text
+rust-ai-examples/
+├── examples/              # All example projects (standalone Cargo crates)
+│   ├── OCR/
+│   ├── decision-tree-classifier/
+│   ├── email-spam-classification/
+│   ├── house-price-prediction/
+│   ├── image-classification/
+│   ├── keyword-extraction/
+│   ├── knn-classifier/
+│   ├── language-detection/
+│   ├── sentiment-analysis/
+│   └── text-classification/
+├── src/content/docs/      # Documentation content (this site)
+├── public/                # Static assets
+├── package.json           # Node.js dependencies
+├── astro.config.mjs       # Astro configuration
+├── tsconfig.json          # TypeScript configuration
+├── Cargo.toml             # (Not at root - each example has its own)
+└── README.md              # Project README
+```
+
+## کالبد یک مثال
+
+هر مثال یک crate مستقل در Cargo است. همگی ساختاری مشترک دارند، اما تعداد ماژول‌ها
+و دارایی‌های موردنیاز متفاوت است:
+
+```text
+example-name/
+├── Cargo.toml               # Its own manifest and dependencies
+├── src/
+│   ├── main.rs              # Entry point (usually the whole pipeline)
+│   ├── model.rs             # Optional: model/classifier code
+│   ├── dataset.rs           # Optional: data loading
+│   └── ...                  # Optional: preprocessing, downloader
+├── data/                    # Optional: committed datasets
+└── models/                  # Optional: model files (committed or downloaded)
+```
+
+| مثال | فایل‌های منبع | نیازمندی‌ها |
+|---------|--------------|----------|
+| [طبقه‌بندی متن](/fa/nlp/text-classification/) | `src/main.rs` | چک‌پوینت BERT در `models/` به‌صورت محلی |
+| [تحلیل احساسات](/fa/nlp/sentiment-analysis/) | `src/main.rs` | دانلود `models/` از Hugging Face |
+| [طبقه‌بندی ایمیل هرزنامه](/fa/nlp/email-spam-classification/) | _(هنوز هیچ‌کدام)_ | دارایی‌های BERT موجود است؛ کد منبع وجود ندارد |
+| [تشخیص زبان](/fa/nlp/language-detection/) | `src/{main,model,dataset}.rs` | `data/languages.json` |
+| [استخراج کلیدواژه](/fa/nlp/keyword-extraction/) | `src/main.rs` | فایل‌های `.txt` در `documents/` |
+| [طبقه‌بند KNN](/fa/machine-learning/knn-classifier/) | `src/main.rs` | `data/iris.csv` |
+| [طبقه‌بند درخت تصمیم](/fa/machine-learning/decision-tree-classifier/) | `src/main.rs` | `data/loans.csv` |
+| [پیش‌بینی قیمت خانه](/fa/machine-learning/house-price-prediction/) | `src/main.rs` | `data/house.csv` |
+| [طبقه‌بندی تصویر](/fa/deep-learning/image-classification/) | `src/{main,model,preprocessing,downloader}.rs` | در نخستین اجرا `models/` را دانلود می‌کند |
+| [OCR](/fa/deep-learning/ocr/) | `src/{main,image_processor}.rs` | فقط توابع کمکی دانلود؛ استنتاج پیاده‌سازی نشده است |
+
+## وضعیت تکمیل
+
+| مثال | قابل‌اجرا؟ | توضیحات |
+|---------|-----------|-------|
+| طبقه‌بند درخت تصمیم | ✅ بله | روی فایل CSV موجود در مخزن آموزش می‌بیند و ارزیابی می‌کند |
+| پیش‌بینی قیمت خانه | ✅ بله | روی فایل CSV موجود در مخزن آموزش می‌بیند و ارزیابی می‌کند |
+| طبقه‌بند KNN | ✅ بله | KNN دست‌نویس با سنجه‌های کامل |
+| تشخیص زبان | ✅ بله | روی `languages.json` آموزش می‌بیند، سپس تعاملی است |
+| استخراج کلیدواژه | ✅ بله | فایل‌های `documents/*.txt` را می‌خواند |
+| تحلیل احساسات | ✅ بله | DistilBERT را دانلود می‌کند، سپس پیش‌بینی و ارزیابی می‌کند |
+| طبقه‌بندی متن | ✅ بله | یک سر خطی را روی BERT محلی آموزش می‌دهد |
+| طبقه‌بندی تصویر | ✅ بله | ResNet-18 را دانلود می‌کند، سپس یک تصویر را طبقه‌بندی می‌کند |
+| طبقه‌بندی ایمیل هرزنامه | ❌ خیر | فقط دارایی‌ها؛ هنوز `src/` وجود ندارد |
+| OCR | ❌ خیر | بدون `fn main`؛ استنتاج پیاده‌سازی نشده است |
+
+## مشارکت
+
+از مشارکت‌ها استقبال می‌شود! لطفاً در صورت تمایل ایشو یا پول‌ریکوئست ارسال کنید.

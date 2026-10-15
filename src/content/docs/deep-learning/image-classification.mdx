@@ -1,0 +1,379 @@
+---
+title: Image Classification
+description: ResNet-18 based image classification on ImageNet using Candle
+---
+
+# Image Classification
+
+## Overview
+
+This example demonstrates ResNet-18 based image classification on ImageNet using [Candle](https://github.com/huggingface/candle).
+
+## Source Code
+
+- [examples/image-classification/src/main.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/image-classification/src/main.rs)
+- [examples/image-classification/src/model.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/image-classification/src/model.rs)
+- [examples/image-classification/src/preprocessing.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/image-classification/src/preprocessing.rs)
+- [examples/image-classification/src/downloader.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/image-classification/src/downloader.rs)
+
+## Project Structure
+
+```text
+examples/image-classification/
+├── Cargo.toml                 # Crate manifest and dependencies
+└── src/
+    ├── main.rs                # CLI entry point: parse args, orchestrate, print top-5
+    ├── downloader.rs          # Fetches model.safetensors and ImageNet labels if missing
+    ├── model.rs               # ImageClassifier: loads ResNet-18 and runs inference
+    └── preprocessing.rs       # load_image: resize + normalize into an NCHW tensor
+```
+
+| Path | Role |
+|------|------|
+| `Cargo.toml` | Defines the `image-classification` crate and its dependencies |
+| `src/main.rs` | Declares the three modules and wires the pipeline together |
+| `src/downloader.rs` | Downloads the weights and label list into `models/` on first run |
+| `src/model.rs` | Wraps `candle_transformers::models::resnet` and the softmax/top-k logic |
+| `src/preprocessing.rs` | Image loading, resizing and ImageNet normalization |
+
+## Dependencies
+
+| Crate | Version | Purpose |
+|-------|---------|---------|
+| `anyhow` | 1 | Error handling |
+| `candle-core` | 0.9 | Tensors, `Device`, `DType` |
+| `candle-nn` | 0.9 | `VarBuilder`, `Module`, `ops::softmax` |
+| `candle-transformers` | 0.9 | `resnet::resnet18` |
+| `image` | 0.25 | Loading/decoding JPEG, PNG and WebP (`default-features = false`) |
+| `reqwest` | 0.12 | Blocking HTTP client (`blocking`, `rustls-tls`) for downloads |
+| `serde_json` | 1 | Parsing the ImageNet label list |
+
+## Algorithm
+
+**ResNet-18** (Residual Network with 18 layers) is a convolutional neural network architecture that introduced skip connections (residual connections) to enable training of very deep networks.
+
+## Implementation Details
+
+- **Library**: Candle (candle-core, candle-nn, candle-transformers)
+- **Model**: ResNet-18 (pre-trained on ImageNet)
+- **Task**: Image classification (1000 classes)
+- **Input**: 224x224 RGB images
+- **Model Format**: SafeTensors
+- **Labels**: ImageNet 1000 class labels (JSON)
+
+## Running the Example
+
+```bash
+cd examples/image-classification
+cargo run --release -- path/to/image.jpg
+# Or use default image:
+cargo run --release
+```
+
+## Code Walkthrough (Line by Line)
+
+### main.rs - Entry Point (Lines 1-70)
+
+```rust
+mod downloader;
+mod model;
+mod preprocessing;
+
+use anyhow::{Context, Result};
+use std::path::Path;
+
+fn main() -> Result<()> {
+    println!("=================================");
+    println!(" Rust Image Classification");
+    println!(" Candle + ResNet-18");
+    println!("=================================\n");
+
+    let image_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "data/image.jpg".to_string());
+
+    let image_path = Path::new(&image_path);
+
+    if !image_path.exists() {
+        anyhow::bail!(
+            "Image not found: {}\n\
+             Usage: cargo run --release -- path/to/image.jpg",
+            image_path.display()
+        );
+    }
+
+    println!("Checking model files...");
+    downloader::ensure_model_files()?;
+
+    let model_path = Path::new("models/model.safetensors");
+    let labels_path = Path::new("models/imagenet-labels.json");
+
+    let labels: Vec<String> = serde_json::from_slice(
+        &std::fs::read(labels_path).context("Could not read ImageNet labels")?,
+    )
+    .context("Invalid ImageNet labels JSON")?;
+
+    println!("\nLoading model...");
+    let classifier = model::ImageClassifier::new(model_path)?;
+
+    println!("Preparing image...");
+    let input = preprocessing::load_image(image_path, classifier.device())?;
+
+    println!("Running inference...\n");
+    let predictions = classifier.predict(&input, 5)?;
+
+    println!("Image: {}", image_path.display());
+    println!("Top predictions:");
+    println!("---------------------------------");
+
+    for (rank, (class_id, probability)) in predictions.iter().enumerate() {
+        let label = labels
+            .get(*class_id)
+            .map(String::as_str)
+            .unwrap_or("Unknown class");
+
+        println!(
+            "{}. {} (class {}, {:.2}%)",
+            rank + 1,
+            label,
+            class_id,
+            probability * 100.0
+        );
+    }
+
+    println!("---------------------------------");
+
+    Ok(())
+}
+```
+
+**Main Flow:**
+1. **Lines 8-26**: Parse command-line argument for image path (defaults to data/image.jpg)
+2. **Lines 28-30**: Download model files if missing (from downloader module)
+3. **Lines 32-37**: Load ImageNet class labels from JSON
+4. **Lines 39-40**: Initialize ImageClassifier (loads ResNet-18 from SafeTensors)
+5. **Lines 42-43**: Preprocess image to tensor (resize, normalize, CHW format)
+6. **Lines 45-46**: Run inference, get top-5 predictions
+7. **Lines 48-65**: Print results with class names and probabilities
+
+### model.rs - Model Loading and Inference (Lines 1-49)
+
+```rust
+use anyhow::{Context, Result};
+use candle_core::{DType, Device, Tensor};
+use candle_nn::VarBuilder;
+use candle_transformers::models::resnet;
+use std::path::Path;
+
+pub struct ImageClassifier {
+    model: resnet::ResNet,
+    device: Device,
+}
+
+impl ImageClassifier {
+    pub fn new(model_path: &Path) -> Result<Self> {
+        let device = Device::Cpu;
+
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device) }
+            .context("Could not load the ResNet safetensors checkpoint")?;
+
+        let model = resnet::resnet18(vb, 1000)
+            .context("Could not initialize ResNet-18; check checkpoint compatibility")?;
+
+        Ok(Self { model, device })
+    }
+
+    pub fn predict(&self, image: &Tensor, top_k: usize) -> Result<Vec<(usize, f32)>> {
+        use candle_nn::Module;
+
+        let logits = self
+            .model
+            .forward(image)
+            .context("Model inference failed")?;
+
+        let probabilities = candle_nn::ops::softmax(&logits, 1)?
+            .squeeze(0)?
+            .to_vec1::<f32>()?;
+
+        let mut predictions: Vec<(usize, f32)> = probabilities.into_iter().enumerate().collect();
+
+        predictions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        predictions.truncate(top_k);
+
+        Ok(predictions)
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+}
+```
+
+**Key Implementation Details:**
+- **Lines 13-23**: Load model using memory-mapped SafeTensors (efficient, no full copy)
+- **Line 19**: `resnet::resnet18(vb, 1000)` - Creates ResNet-18 with 1000 output classes
+- **Lines 25-43**: Inference pipeline:
+  1. Forward pass through model → logits [1, 1000]
+  2. Softmax on dim 1 → probabilities [1, 1000]
+  3. Squeeze batch dim → [1000]
+  4. Convert to `Vec<f32>`
+  5. Enumerate to get (class_id, probability) pairs
+  6. Sort by probability descending
+  7. Truncate to top_k
+
+### preprocessing.rs - Image Preprocessing (Lines 1-39)
+
+```rust
+use anyhow::{Context, Result};
+use candle_core::{Device, Tensor};
+use image::imageops::FilterType;
+use std::path::Path;
+
+const IMAGE_SIZE: u32 = 224;
+
+const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+const STD: [f32; 3] = [0.229, 0.224, 0.225];
+
+pub fn load_image(path: &Path, device: &Device) -> Result<Tensor> {
+    let image = image::open(path)
+        .with_context(|| format!("Could not open image: {}", path.display()))?
+        .to_rgb8();
+
+    let resized = image::imageops::resize(&image, IMAGE_SIZE, IMAGE_SIZE, FilterType::Triangle);
+
+    let mut channels = vec![0.0_f32; 3 * IMAGE_SIZE as usize * IMAGE_SIZE as usize];
+
+    let plane_size = (IMAGE_SIZE * IMAGE_SIZE) as usize;
+
+    for (x, y, pixel) in resized.enumerate_pixels() {
+        let index = (y * IMAGE_SIZE + x) as usize;
+
+        for channel in 0..3 {
+            let value = pixel[channel] as f32 / 255.0;
+
+            channels[channel * plane_size + index] = (value - MEAN[channel]) / STD[channel];
+        }
+    }
+
+    let tensor = Tensor::from_vec(
+        channels,
+        (1, 3, IMAGE_SIZE as usize, IMAGE_SIZE as usize),
+        device,
+    )?;
+
+    Ok(tensor)
+}
+```
+
+**Preprocessing Pipeline (Standard ImageNet):**
+1. **Lines 11-14**: Load image, convert to RGB8
+2. **Line 16**: Resize to 224x224 using Triangle (bilinear) filter
+3. **Lines 18-30**: Manual CHW (channel-height-width) layout with normalization:
+   - Convert pixel values from [0, 255] → [0, 1]
+   - Apply ImageNet normalization: (x - mean) / std per channel
+   - Mean = [0.485, 0.456, 0.406], Std = [0.229, 0.224, 0.225]
+   - Store in CHW order: all R pixels, then all G, then all B
+4. **Lines 32-36**: Create tensor with shape [1, 3, 224, 224] (NCHW format)
+
+### downloader.rs - Model Download (Lines 1-60)
+
+```rust
+use anyhow::{Context, Result};
+use std::fs;
+use std::path::Path;
+
+const MODEL_URL: &str =
+    "https://huggingface.co/timm/resnet18.a1_in1k/resolve/main/model.safetensors";
+
+const LABELS_URL: &str = "https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet-simple-labels.json";
+
+pub fn download_file(url: &str, destination: &Path) -> Result<()> {
+    if destination.exists() {
+        println!("Already exists: {}", destination.display());
+        return Ok(());
+    }
+
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    println!("Downloading: {url}");
+
+    let response = reqwest::blocking::Client::new()
+        .get(url)
+        .send()
+        .with_context(|| format!("Failed to request {url}"))?
+        .error_for_status()
+        .with_context(|| format!("Download failed: {url}"))?;
+
+    let bytes = response.bytes()?;
+
+    if bytes.is_empty() {
+        anyhow::bail!("Downloaded file is empty: {url}");
+    }
+
+    let temporary_path = destination.with_extension("download");
+
+    fs::write(&temporary_path, &bytes)
+        .with_context(|| format!("Failed to write {}", temporary_path.display()))?;
+
+    fs::rename(&temporary_path, destination)
+        .with_context(|| format!("Failed to save {}", destination.display()))?;
+
+    println!(
+        "Downloaded {} ({:.2} MB)",
+        destination.display(),
+        bytes.len() as f64 / 1_000_000.0
+    );
+
+    Ok(())
+}
+
+pub fn ensure_model_files() -> Result<()> {
+    let model_path = Path::new("models/model.safetensors");
+    let labels_path = Path::new("models/imagenet-labels.json");
+
+    download_file(MODEL_URL, model_path)?;
+    download_file(LABELS_URL, labels_path)?;
+
+    Ok(())
+}
+```
+
+**Download details:**
+- **Lines 5-8**: The two source URLs — a ResNet-18 checkpoint (`timm/resnet18.a1_in1k`) and
+  the 1000 simple ImageNet labels.
+- **Lines 10-14**: `download_file` returns early if the destination already exists, so only
+  the first run touches the network.
+- **Lines 16-18**: Creates the parent directory (`models/`) when needed.
+- **Lines 22-27**: Blocking GET; `.error_for_status()` turns HTTP error codes into `Err`.
+- **Lines 29-33**: Rejects an empty body so a failed download never leaves a zero-byte file.
+- **Lines 35-41**: Writes to a `.download` temp file and atomically renames it into place, so
+  an interrupted run cannot leave a corrupt `model.safetensors`.
+- **Lines 52-58**: `ensure_model_files` downloads both artifacts into `models/`.
+
+## Model Files
+
+`models/` is populated automatically by the downloader above:
+
+| File | Source | Role |
+|------|--------|------|
+| `model.safetensors` | `timm/resnet18.a1_in1k` | ResNet-18 weights |
+| `imagenet-labels.json` | `imagenet-simple-labels` | 1000 human-readable class names |
+
+## Expected Output
+
+```
+Image: data/cat.jpg
+Top predictions:
+---------------------------------
+1. tabby cat (class 281, 92.34%)
+2. tiger cat (class 282, 4.12%)
+3. Egyptian cat (class 285, 1.23%)
+4. lynx (class 289, 0.89%)
+5. red fox (class 277, 0.45%)
+---------------------------------
+```
+
+The program outputs the top-5 predicted classes with their probabilities for the input image.

@@ -1,0 +1,201 @@
+---
+title: Email Spam Classification
+description: Assets for a BERT-based spam/ham classifier with Candle and tokenizers (source code not yet implemented)
+---
+
+# Email Spam Classification
+
+## Status
+
+:::caution[Work in progress — not runnable yet]
+This example currently contains **only assets and dependencies**: a dataset, a fine-tuned
+BERT checkpoint, tokenizer files, and a `Cargo.toml`. There is **no `src/` directory**, so
+`cargo run` fails with *"no targets ... in the manifest"*. This page documents what is present,
+what the files contain, and how the missing Rust code is expected to be wired up.
+:::
+
+Unlike the other examples in this repository, this one does not yet have a `src/main.rs`.
+
+## Example Structure (current)
+
+```text
+examples/email-spam-classification/
+├── Cargo.toml                      # Dependencies are declared, but no binary target exists
+├── data/
+│   ├── spam.csv                    # Raw CSV: title,text,type
+│   └── spam.json                   # JSON array: { text, is_spam }
+└── models/
+    ├── config.json                 # BERT config for BertForSequenceClassification
+    ├── model.safetensors           # Fine-tuned weights (17 MB)
+    ├── vocab.txt                   # WordPiece vocabulary (30522 tokens)
+    ├── tokenizer_config.json       # Tokenizer settings (do_lower_case, special tokens)
+    └── special_tokens_map.json     # Maps [UNK]/[SEP]/[PAD]/[CLS]/[MASK]
+```
+
+`find examples/email-spam-classification -name '*.rs'` returns nothing — no Rust source exists yet.
+
+## Dependencies (declared in `Cargo.toml`)
+
+| Crate | Version | Intended use |
+|-------|---------|--------------|
+| `anyhow` | 1 | Error handling |
+| `ahash` | 0.8 | Fast hash maps |
+| `candle-core` | 0.9 | Tensors, `Device`, `DType` |
+| `candle-nn` | 0.9 | `Linear`, `VarBuilder`, softmax |
+| `candle-transformers` | 0.9 | `bert::BertModel` |
+| `safetensors` | 0.5 | Reading `.safetensors` metadata |
+| `tokenizers` | 0.21 | WordPiece tokenizer |
+| `csv` | 1 | Reading `data/spam.csv` |
+| `serde` / `serde_json` | 1 | Dataset and config parsing |
+
+## The Dataset
+
+### `data/spam.csv`
+
+A conventional spam corpus with a header row and three columns:
+
+```csv
+title,text,type
+?? the secrets to SUCCESS,"Hi James,
+
+Have you claim your complimentary gift yet?
+..."
+```
+
+- `title` — the email subject line.
+- `text` — the full email body (may contain quoted newlines, hence multi-line records).
+- `type` — the class (e.g. spam / ham).
+
+### `data/spam.json`
+
+A pre-processed export as a single JSON array of `{ text, is_spam }` records:
+
+```json
+[{"text": "Subject: naturally irresistible your corporate identity ...", "is_spam": 1}, ...]
+```
+
+- **10,899** records.
+- `is_spam = 1` for spam (2,867) and `is_spam = 0` for ham (8,032) — roughly a 26/74 split,
+  so the classes are **imbalanced** and accuracy alone would be misleading.
+
+## The Model
+
+`models/model.safetensors` is a small fine-tuned BERT. Its header (43 tensors) includes:
+
+| Tensor | Shape | Meaning |
+|--------|-------|---------|
+| `bert.embeddings.word_embeddings.weight` | `[30522, 128]` | Token embeddings |
+| `bert.encoder.layer.0..1.*` | — | Two transformer layers (hidden size 128) |
+| `bert.pooler.dense.weight` | `[128, 128]` | Pooler over the `[CLS]` token |
+| `classifier.weight` | `[2, 128]` | **Binary** classification head |
+| `classifier.bias` | `[2]` | Two output logits |
+
+Key observations that matter when implementing inference:
+
+- The tensors are prefixed **`bert.`** (not `distilbert.`), so they load with
+  `candle_transformers::models::bert::BertModel` accessed through `vb.pp("bert")`.
+- `classifier.weight` has two rows, so the model is a **binary spam/ham classifier**, even
+  though `models/config.json` **does not contain `num_labels`**. A loader must hard-code 2 or
+  infer it from the weight shape.
+- There is **no `tokenizer.json`** — only `vocab.txt`, `tokenizer_config.json` and
+  `special_tokens_map.json`. The tokenizer therefore has to be assembled in code from
+  `vocab.txt`, exactly as the [Text Classification](/nlp/text-classification/) example does.
+
+### `models/config.json` (abridged)
+
+```json
+{
+  "architectures": ["BertForSequenceClassification"],
+  "hidden_size": 128,
+  "num_hidden_layers": 2,
+  "num_attention_heads": 2,
+  "max_position_embeddings": 512,
+  "vocab_size": 30522,
+  "_name_or_path": "/content/drive/MyDrive/spam-ham/checkpoint-447"
+}
+```
+
+`tokenizer_config.json` reports the tokenizer's `name_or_path` as
+`google/bert_uncased_L-2_H-128_A-2`, i.e. the "tiny BERT" architecture.
+
+## Intended Implementation
+
+The model assets strongly imply the following pipeline, which mirrors the other Candle examples
+in this repository:
+
+```text
+example-name/
+├── Cargo.toml
+├── src/
+│   ├── main.rs          # CLI: train / predict / evaluate
+│   ├── dataset.rs       # Load spam.csv or spam.json -> (text, is_spam)
+│   ├── model.rs         # Load BertModel + classifier head, run inference
+│   └── tokenizer.rs     # Build WordPiece tokenizer from vocab.txt
+├── data/
+└── models/
+```
+
+1. **Load the dataset** — read `spam.csv` (`title`/`text` + `type`) or `spam.json`
+   (`text` + `is_spam`), normalize labels to `0`/`1`.
+2. **Build the tokenizer** — construct a WordPiece tokenizer from `vocab.txt` with the
+   `[CLS]/[SEP]/[PAD]/[UNK]` ids from `special_tokens_map.json`, truncating/padding to a fixed
+   length (e.g. 128).
+3. **Load the model** — memory-map `model.safetensors` with `VarBuilder`, build
+   `BertModel::load(vb.pp("bert"), &config)`, then load `classifier` as
+   `linear(128, 2, vb.pp("classifier"))`.
+4. **Predict** — forward pass with `input_ids`, `token_type_ids`, `attention_mask`; take the
+   pooler/`[CLS]` output, apply the classifier and softmax to get `[ham, spam]` probabilities.
+5. **Evaluate** — because the data is imbalanced, report **precision, recall and F1 for the
+   spam class** alongside a confusion matrix, not just accuracy.
+6. **CLI** — an interactive prompt plus one-shot commands such as
+   `cargo run -- predict "..."` and `cargo run -- evaluate`.
+
+### Blending the model with the training head
+
+Because the checkpoint is *already fine-tuned* for spam/ham, the intended example is primarily
+**inference**, not training: load the weights, classify messages, and evaluate on held-out data.
+A training path would additionally fine-tune `classifier` (and optionally the encoder).
+
+## Running the Example
+
+Not available yet. Once `src/main.rs` exists:
+
+```bash
+cd examples/email-spam-classification
+cargo run
+```
+
+Until then, only the assets can be inspected:
+
+```bash
+# Inspect the fine-tuned weights header
+python3 - <<'PY'
+import struct, json
+with open("models/model.safetensors", "rb") as f:
+    n = struct.unpack("<Q", f.read(8))[0]
+    header = json.loads(f.read(n))
+print(len(header), "tensors")
+print({k: v["shape"] for k, v in header.items() if "classifier" in k})
+PY
+```
+
+## Expected Output (When Implemented)
+
+```text
+==================================================
+          EMAIL SPAM CLASSIFIER
+==================================================
+Model: models/model.safetensors
+Task : binary classification (ham / spam)
+
+ham  -> "Hey, are we still meeting at 10?"
+spam -> "CONGRATULATIONS! You have won a free prize, click here!"
+
+Evaluation (spam = positive class):
+Accuracy:  xx.xx%
+Precision: x.xxx
+Recall:    x.xxx
+F1-score:  x.xxx
+```
+
+The exact numbers depend on the evaluation split and are illustrative only.

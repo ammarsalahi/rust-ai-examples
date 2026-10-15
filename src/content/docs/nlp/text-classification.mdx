@@ -1,0 +1,990 @@
+---
+title: Text Classification
+description: Fine-tune a linear classifier on frozen BERT embeddings with Candle, the tokenizers crate, and a local model
+---
+
+# Text Classification
+
+## Overview
+
+This example builds a **multi-class text classifier** on top of a BERT encoder. Rather than
+downloading a pretrained model from the Hub, it loads a **local** BERT checkpoint from disk
+(`models/config.json`, `models/model.safetensors`, `models/vocab.txt`).
+
+The workflow is a *feature-extraction + linear-probe* transfer-learning pipeline:
+
+1. Build a WordPiece tokenizer in code from `vocab.txt`.
+2. Run every sentence through the frozen BERT encoder and take the `[CLS]` vector as a
+   fixed-size sentence embedding.
+3. Train a single `Linear` layer (`hidden_size -> num_classes`) on those embeddings with
+   AdamW and cross-entropy loss.
+4. Save the trained head to `models/classifier_h{hidden}_c{classes}.safetensors`.
+5. Enter an interactive loop that classifies new text.
+
+Because the BERT weights never change, training is fast and only a tiny number of parameters
+are learned. This is the classic "linear probe" way to reuse a pretrained encoder.
+
+## Source Code
+
+[examples/text-classification/src/main.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/text-classification/src/main.rs)
+
+## Example Structure
+
+```text
+examples/text-classification/
+├── Cargo.toml                          # Dependencies
+├── src/
+│   └── main.rs                         # Entire pipeline (1008 lines)
+├── data/
+│   └── dataset.csv                     # Training data: text,label
+└── models/
+    ├── config.json                     # BERT architecture (hidden_size 128)
+    ├── model.safetensors               # BERT encoder weights
+    └── vocab.txt                       # WordPiece vocabulary (30522 tokens)
+```
+
+| Path | Role |
+|------|------|
+| `Cargo.toml` | Crate name `text-classification` and its dependencies |
+| `src/main.rs` | Everything: file checks, dataset loading, tokenizer, encoder, training, CLI |
+| `data/dataset.csv` | Labeled examples, header row `text,label` |
+| `models/config.json` | BERT hyper-parameters read by `BertConfig` |
+| `models/model.safetensors` | Memory-mapped BERT encoder weights |
+| `models/vocab.txt` | One token per line; used to construct the WordPiece tokenizer |
+| `models/classifier_h*_c*.safetensors` | **Generated** after first training run |
+
+:::note
+The trained classifier file is created by the program itself. Deleting it forces a fresh
+training run on the next `cargo run`.
+:::
+
+## Dependencies
+
+| Crate | Version | Purpose |
+|-------|---------|---------|
+| `anyhow` | 1 | Ergonomic error propagation (`Result`, `Context`) |
+| `candle-core` | 0.9 | Tensors, `Device`, `DType` |
+| `candle-nn` | 0.9 | `Linear`, `Module`, `AdamW`, `VarMap`, `cross_entropy`, `softmax` |
+| `candle-transformers` | 0.9 | `resnet`/`bert` model definitions, here `BertModel` |
+| `csv` | 1 | Reading `dataset.csv` |
+| `rand` | 0.9 | Shuffling during the stratified split and each epoch |
+| `serde` | 1 | Deriving `Deserialize` for the CSV rows |
+| `serde_json` | 1 | Parsing `config.json` |
+| `tokenizers` | 0.21 | Building the WordPiece tokenizer, truncation and padding |
+
+## Data and Model Files
+
+### `data/dataset.csv`
+
+A header row followed by one example per line. The labels are arbitrary strings; the program
+discovers the unique set automatically.
+
+```csv
+text,label
+Rust is a systems programming language,programming
+Python is used for software development,programming
+The developer created a REST API,programming
+```
+
+### `models/config.json`
+
+The local BERT is a small model. The program prints these values at startup and reads
+`hidden_size` from them:
+
+```json
+{
+  "hidden_size": 128,
+  "intermediate_size": 512,
+  "max_position_embeddings": 512,
+  "num_attention_heads": 2,
+  "num_hidden_layers": 2,
+  "model_type": "bert",
+  "vocab_size": 30522
+}
+```
+
+### `models/vocab.txt`
+
+A plain text file with one token per line (the standard BERT `[PAD]`, `[UNK]`, `[CLS]`,
+`[SEP]`, ... vocabulary). It must contain `30522` entries to match `vocab_size`.
+
+---
+
+## Code Walkthrough (Line by Line)
+
+### 1. Imports (Lines 1-19)
+
+```rust
+use anyhow::{Context, Result, anyhow};
+use candle_core::{DType, Device, Tensor};
+use candle_nn::{
+    AdamW, Linear, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap, linear, loss::cross_entropy,
+};
+use candle_transformers::models::bert::{BertModel, Config as BertConfig};
+use rand::seq::SliceRandom;
+use serde::Deserialize;
+use std::{
+    collections::BTreeSet,
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
+use tokenizers::{
+    PaddingParams, PaddingStrategy, Tokenizer, TruncationParams, models::wordpiece::WordPiece,
+    normalizers::BertNormalizer, pre_tokenizers::bert::BertPreTokenizer,
+    processors::template::TemplateProcessing,
+};
+```
+
+- **Candle NN pieces** — `AdamW` and `Optimizer` drive training; `Linear` and `Module` build
+  and run the head; `VarMap`/`VarBuilder` give the head its own named parameters; `cross_entropy`
+  is the loss; `linear` is a helper that constructs a `Linear` layer.
+- **`BertConfig`** is imported as an alias so it does not clash with anything else.
+- **`tokenizers` building blocks** — `WordPiece`, `BertNormalizer`, `BertPreTokenizer`,
+  `TemplateProcessing`, `TruncationParams`, `PaddingParams` are assembled by hand in
+  `build_tokenizer` instead of loading a `tokenizer.json`.
+- **`rand::seq::SliceRandom`** provides `shuffle` for `Vec`.
+
+### 2. Fixed Paths (Lines 21-31)
+
+```rust
+const DATASET_PATH: &str = "data/dataset.csv";
+
+const CONFIG_PATH: &str = "models/config.json";
+const WEIGHTS_PATH: &str = "models/model.safetensors";
+const VOCAB_PATH: &str = "models/vocab.txt";
+
+const MODELS_DIR: &str = "models";
+```
+
+- All inputs are hard-coded relative paths, so the example must be run from
+  `examples/text-classification/`.
+- `MODELS_DIR` is also the directory where the trained head is written.
+
+### 3. Training Configuration (Lines 33-43)
+
+```rust
+const MAX_LENGTH: usize = 64;
+
+const EPOCHS: usize = 10;
+
+const LEARNING_RATE: f64 = 0.001;
+
+const CONFIDENCE_THRESHOLD: f32 = 0.60;
+```
+
+- **`MAX_LENGTH = 64`** — every input is padded/truncated to exactly 64 tokens. The tokenizer
+  is configured with *fixed* padding to this length, so `encode_text` can assert the exact size.
+- **`EPOCHS = 10`** — number of full passes over the training embeddings.
+- **`LEARNING_RATE = 0.001`** — AdamW learning rate.
+- **`CONFIDENCE_THRESHOLD = 0.60`** — below this probability the interactive loop prints a
+  low-confidence warning.
+
+### 4. Dataset Types (Lines 45-69)
+
+```rust
+#[derive(Debug, Deserialize, Clone)]
+struct Sample {
+    text: String,
+    label: String,
+}
+
+#[derive(Debug, Clone)]
+struct LabeledSample {
+    text: String,
+    label: usize,
+}
+
+struct Dataset {
+    samples: Vec<LabeledSample>,
+    labels: Vec<String>,
+}
+
+struct DatasetSplit {
+    train: Vec<LabeledSample>,
+    validation: Vec<LabeledSample>,
+}
+```
+
+- **`Sample`** mirrors a CSV row exactly (`text`, `label`), so `csv` can `deserialize` directly.
+- **`LabeledSample`** is the same row with the label already converted to a numeric id.
+- **`Dataset`** keeps the samples plus the ordered list of class names (index = class id).
+- **`DatasetSplit`** holds the stratified train/validation halves.
+
+### 5. Model File Paths (Lines 71-80)
+
+```rust
+#[derive(Debug, Clone)]
+struct ModelFiles {
+    config: PathBuf,
+    vocab: PathBuf,
+    weights: PathBuf,
+}
+```
+
+A small bundle holding the three local model paths, so `load_encoder` receives one argument.
+
+### 6. Encoder and Classifier (Lines 82-102)
+
+```rust
+struct Encoder {
+    model: BertModel,
+    tokenizer: Tokenizer,
+    device: Device,
+    hidden_size: usize,
+}
+
+struct Classifier {
+    linear: Linear,
+    varmap: VarMap,
+    hidden_size: usize,
+    num_classes: usize,
+}
+```
+
+- **`Encoder`** bundles the frozen BERT model, its tokenizer, the device and the embedding
+  width. `hidden_size` is cached so downstream code does not re-read the config.
+- **`Classifier`** is the trainable part. `VarMap` owns the weights so they can be saved/loaded
+  with `.save()` / `.load()`; `linear` is the actual `hidden_size -> num_classes` layer.
+
+### 7. `main` (Lines 108-271)
+
+```rust
+fn main() -> Result<()> {
+    fs::create_dir_all("data").context("failed to create data directory")?;
+
+    fs::create_dir_all(MODELS_DIR).context("failed to create models directory")?;
+```
+
+- Creates `data/` and `models/` if missing so later writes never fail spuriously.
+
+```rust
+    check_required_file(DATASET_PATH)?;
+    check_required_file(CONFIG_PATH)?;
+    check_required_file(WEIGHTS_PATH)?;
+    check_required_file(VOCAB_PATH)?;
+```
+
+- Fails early with a clear message if any input is missing.
+
+```rust
+    let dataset = load_dataset(dataset_path)?;
+
+    if dataset.samples.is_empty() {
+        return Err(anyhow!("dataset is empty"));
+    }
+
+    print_dataset_stats(&dataset);
+```
+
+- Loads and validates the dataset, then prints the class distribution.
+
+```rust
+    let device = Device::Cpu;
+```
+
+- Inference and training run on CPU. The `Device` is a cheap handle that is cloned into the
+  `Encoder`.
+
+```rust
+    let model_files = ModelFiles {
+        config: PathBuf::from(CONFIG_PATH),
+        vocab: PathBuf::from(VOCAB_PATH),
+        weights: PathBuf::from(WEIGHTS_PATH),
+    };
+
+    let encoder = load_encoder(&model_files, device.clone())?;
+```
+
+- Population of the path bundle and construction of the frozen encoder.
+
+```rust
+    let split = stratified_split(&dataset.samples, 0.8);
+```
+
+- 80/20 split that preserves the class balance (see below).
+
+```rust
+    let classifier_path = classifier_path(dataset.labels.len(), encoder.hidden_size);
+
+    let mut classifier = create_classifier(&device, encoder.hidden_size, dataset.labels.len())?;
+```
+
+- Computes the on-disk name for the trained head and creates a fresh, randomly initialized
+  head. This always happens; if a saved head exists it is loaded over the fresh weights next.
+
+```rust
+    if classifier_path.exists() {
+        classifier
+            .varmap
+            .load(&classifier_path)
+            .context("failed to load classifier")?;
+    } else {
+        let train_embeddings = encode_samples(&encoder, &split.train)?;
+        let validation_embeddings = encode_samples(&encoder, &split.validation)?;
+
+        train_classifier(&mut classifier, &train_embeddings, &validation_embeddings)?;
+
+        classifier
+            .varmap
+            .save(&classifier_path)
+            .context("failed to save classifier")?;
+    }
+```
+
+- **If a head exists**, load it and skip training.
+- **Otherwise**: encode the training and validation splits into `[CLS]` embeddings, train the
+  linear head, and persist it. The embeddings are computed once because the encoder is frozen.
+
+```rust
+    interactive_loop(&encoder, &classifier, &dataset.labels)?;
+
+    Ok(())
+}
+```
+
+- Starts the read-eval-print loop for interactive classification.
+
+### 8. `check_required_file` (Lines 277-293)
+
+```rust
+fn check_required_file(path: &str) -> Result<()> {
+    let path = Path::new(path);
+
+    if !path.exists() {
+        return Err(anyhow!(
+            "required file not found: {}\n\
+             Please place the file at this path.",
+            path.display()
+        ));
+    }
+
+    if !path.is_file() {
+        return Err(anyhow!("path exists but is not a file: {}", path.display()));
+    }
+
+    Ok(())
+}
+```
+
+- Distinguishes "missing" from "exists but is a directory" and produces an actionable message.
+
+### 9. `load_dataset` (Lines 299-368)
+
+```rust
+    let mut reader = csv::Reader::from_path(path)
+        .with_context(|| format!("failed to open dataset: {}", path.display()))?;
+
+    let mut raw_samples = Vec::<Sample>::new();
+
+    for result in reader.deserialize::<Sample>() {
+        let sample = result.context("failed to parse CSV row")?;
+
+        if sample.text.trim().is_empty() { continue; }
+        if sample.label.trim().is_empty() { continue; }
+
+        raw_samples.push(sample);
+    }
+```
+
+- Reads every row into `Sample`, silently skipping rows with an empty text or label.
+
+```rust
+    let unique_labels: BTreeSet<String> = raw_samples
+        .iter()
+        .map(|sample| sample.label.trim().to_string())
+        .collect();
+
+    let labels: Vec<String> = unique_labels.into_iter().collect();
+
+    if labels.len() < 2 {
+        return Err(anyhow!("dataset must contain at least 2 different labels"));
+    }
+```
+
+- `BTreeSet` gives a **deterministic, alphabetically sorted** class order, which is essential
+  because the class ids must stay stable between the training run and later prediction runs.
+
+```rust
+    for sample in raw_samples {
+        let label_name = sample.label.trim();
+
+        let label_id = labels
+            .iter()
+            .position(|label| label == label_name)
+            .ok_or_else(|| anyhow!("failed to map label `{}`", label_name))?;
+
+        samples.push(LabeledSample {
+            text: sample.text,
+            label: label_id,
+        });
+    }
+```
+
+- Maps each string label to its index in `labels` and builds the final `Dataset`.
+
+### 10. `print_dataset_stats` (Lines 374-392)
+
+```rust
+    let mut counts = vec![0usize; dataset.labels.len()];
+
+    for sample in &dataset.samples {
+        if sample.label < counts.len() {
+            counts[sample.label] += 1;
+        }
+    }
+```
+
+- Per-class histogram, printed to help spot an imbalanced dataset before training.
+
+### 11. `load_encoder` (Lines 398-444)
+
+```rust
+    let config_text = fs::read_to_string(&files.config).context("failed to read config.json")?;
+
+    let config: BertConfig =
+        serde_json::from_str(&config_text).context("failed to parse BERT config.json")?;
+```
+
+- Reads and parses the BERT architecture description.
+
+```rust
+    let tokenizer = build_tokenizer(&files.vocab)?;
+```
+
+- Builds the tokenizer (see next section).
+
+```rust
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[&files.weights], DType::F32, &device) }
+        .context("failed to memory-map model.safetensors")?;
+
+    let model = BertModel::load(vb, &config).context("failed to load BERT model")?;
+```
+
+- `from_mmaped_safetensors` memory-maps the weights instead of copying them, keeping RAM use
+  low. It is `unsafe` because the memory map must not be mutated concurrently — safe here
+  because the file is read-only.
+- `BertModel::load` consumes the `VarBuilder` and builds the encoder.
+- The returned `Encoder` caches `config.hidden_size` (128 here).
+
+### 12. `build_tokenizer` (Lines 450-509)
+
+```rust
+    let wordpiece = WordPiece::from_file(&vocab)
+        .unk_token("[UNK]".to_string())
+        .continuing_subword_prefix("##".to_string())
+        .build()
+        .map_err(|e| anyhow!("failed to build WordPiece tokenizer: {e}"))?;
+
+    let mut tokenizer = Tokenizer::new(wordpiece);
+```
+
+- Constructs the WordPiece model directly from `vocab.txt`, using `[UNK]` and `##` exactly as
+  BERT does.
+
+```rust
+    let normalizer = BertNormalizer::new(true, true, Some(true), true);
+    tokenizer.with_normalizer(Some(normalizer));
+
+    tokenizer.with_pre_tokenizer(Some(BertPreTokenizer));
+```
+
+- **`BertNormalizer`** args: `clean_text`, `handle_chinese_chars`, `strip_accents = Some(true)`,
+  `lowercase = true`. These are BERT's standard text-canonicalization steps.
+- **`BertPreTokenizer`** splits on whitespace and punctuation.
+
+```rust
+    let processor = TemplateProcessing::builder()
+        .try_single("[CLS] $A [SEP]")
+        .map_err(|e| anyhow!("failed to configure tokenizer template: {e}"))?
+        .special_tokens(vec![("[CLS]".to_string(), 101), ("[SEP]".to_string(), 102)])
+        .build()
+        .map_err(|e| anyhow!("failed to build tokenizer processor: {e}"))?;
+
+    tokenizer.with_post_processor(Some(processor));
+```
+
+- Wraps each sequence as `[CLS] tokens [SEP]`, assigning the standard BERT ids 101/102.
+
+```rust
+    tokenizer
+        .with_truncation(Some(TruncationParams {
+            max_length: MAX_LENGTH,
+            ..Default::default()
+        }))?;
+
+    tokenizer.with_padding(Some(PaddingParams {
+        strategy: PaddingStrategy::Fixed(MAX_LENGTH),
+        ..Default::default()
+    }));
+```
+
+- **Truncation** to `MAX_LENGTH = 64`.
+- **Fixed padding** to exactly 64 tokens. Combined with the length check in `encode_text`,
+  this guarantees a `[1, 64]` input tensor for every sample.
+
+### 13. `stratified_split` (Lines 515-549)
+
+```rust
+    let max_label = samples.iter().map(|sample| sample.label).max().unwrap_or(0);
+
+    let mut groups: Vec<Vec<LabeledSample>> = (0..=max_label).map(|_| Vec::new()).collect();
+
+    for sample in samples {
+        groups[sample.label].push(sample.clone());
+    }
+```
+
+- Buckets samples by class so each class can be split independently.
+
+```rust
+    let mut rng = rand::rng();
+
+    for group in &mut groups {
+        group.shuffle(&mut rng);
+
+        let mut train_size = ((group.len() as f32) * train_ratio).round() as usize;
+
+        if group.len() > 1 {
+            train_size = train_size.max(1).min(group.len() - 1);
+        } else {
+            train_size = group.len();
+        }
+
+        train.extend_from_slice(&group[..train_size]);
+        validation.extend_from_slice(&group[train_size..]);
+    }
+
+    train.shuffle(&mut rng);
+    validation.shuffle(&mut rng);
+```
+
+- Shuffles each class group, then assigns `train_ratio` of it to training.
+- The `max(1).min(len - 1)` guard guarantees at least one sample in each side as long as a
+  class has two or more members; a singleton class goes entirely to training.
+- Finally both partitions are shuffled so classes are interleaved during training.
+
+:::caution
+`stratified_split` uses `rand::rng()`, a **non-seeded** thread RNG, so the split differs on each
+run. If you need reproducible training, replace it with a seeded `StdRng` (as the other
+examples in this repository do).
+:::
+
+### 14. `encode_samples` (Lines 555-569)
+
+```rust
+    for (index, sample) in samples.iter().enumerate() {
+        let embedding = encode_text(encoder, &sample.text)?;
+
+        result.push((embedding, sample.label));
+
+        if (index + 1) % 10 == 0 || index + 1 == samples.len() {
+            println!("  encoded {}/{}", index + 1, samples.len());
+        }
+    }
+```
+
+- Runs the encoder once per sample and returns `(embedding, label)` pairs, printing progress
+  every 10 samples.
+
+### 15. `encode_text` (Lines 575-665)
+
+```rust
+    let encoding = encoder
+        .tokenizer
+        .encode(text, true)
+        .map_err(|e| anyhow!("tokenization failed: {e}"))?;
+
+    let ids: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
+    let type_ids: Vec<i64> = encoding.get_type_ids().iter().map(|&id| id as i64).collect();
+    let attention_mask: Vec<i64> = encoding.get_attention_mask().iter().map(|&id| id as i64).collect();
+```
+
+- `encode(text, true)` adds the special tokens. The three parallel vectors (`input_ids`,
+  `token_type_ids`, `attention_mask`) are what BERT needs. `u32` ids are promoted to `i64`
+  because Candle's default integer tensor type is `i64`.
+
+```rust
+    if ids.len() != MAX_LENGTH {
+        return Err(anyhow!("unexpected tokenized length: {}, expected {}", ids.len(), MAX_LENGTH));
+    }
+
+    let input_ids = Tensor::new(ids.as_slice(), &encoder.device)?.unsqueeze(0)?;
+    let token_type_ids = Tensor::new(type_ids.as_slice(), &encoder.device)?.unsqueeze(0)?;
+    let attention_mask = Tensor::new(attention_mask.as_slice(), &encoder.device)?.unsqueeze(0)?;
+```
+
+- The fixed-padding contract is asserted here. `unsqueeze(0)` adds the batch dimension so each
+  tensor becomes `[1, 64]`.
+
+```rust
+    let hidden = encoder
+        .model
+        .forward(&input_ids, &token_type_ids, Some(&attention_mask))
+        .context("BERT forward pass failed")?;
+```
+
+- Full forward pass. Output shape is `[batch=1, seq=64, hidden=128]`.
+
+```rust
+    let sequence = hidden.get(0)?;
+    let cls = sequence.get(0)?.contiguous()?;
+    let embedding = cls.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+```
+
+- `hidden.get(0)` drops the batch dim -> `[64, 128]`; `.get(0)` selects the first token
+  (`[CLS]`) -> `[128]`; `.contiguous()` makes it a compact buffer so `to_vec1` works.
+- The `[CLS]` vector is the sentence embedding used as the classifier input.
+
+```rust
+    if embedding.len() != encoder.hidden_size {
+        return Err(anyhow!("unexpected embedding size: {}, expected {}", embedding.len(), encoder.hidden_size));
+    }
+```
+
+- Final guard that the embedding width matches `hidden_size`.
+
+### 16. `classifier_path` (Lines 671-676)
+
+```rust
+fn classifier_path(num_classes: usize, hidden_size: usize) -> PathBuf {
+    PathBuf::from(format!(
+        "{}/classifier_h{}_c{}.safetensors",
+        MODELS_DIR, hidden_size, num_classes
+    ))
+}
+```
+
+- Encodes the head shape into the file name (e.g. `models/classifier_h128_c3.safetensors`), so
+  changing the model or the number of classes automatically invalidates the cached head.
+
+### 17. `create_classifier` (Lines 682-703)
+
+```rust
+    if num_classes < 2 {
+        return Err(anyhow!("classifier requires at least 2 classes"));
+    }
+
+    let varmap = VarMap::new();
+    let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+    let linear_layer = linear(hidden_size, num_classes, vb.pp("classifier"))?;
+```
+
+- A fresh `VarMap` owns the parameters. `VarBuilder::from_varmap` exposes them under the
+  `"classifier"` prefix, and `linear(hidden, classes, vb)` creates and initializes the weight
+  matrix and bias. The same `VarMap` is later used to save/load.
+
+### 18. `train_classifier` (Lines 709-811)
+
+```rust
+    let mut optimizer = AdamW::new(
+        classifier.varmap.all_vars(),
+        ParamsAdamW {
+            lr: LEARNING_RATE,
+            beta1: 0.9,
+            beta2: 0.999,
+            eps: 1e-8,
+            weight_decay: 0.0,
+        },
+    )?;
+```
+
+- AdamW over exactly the head's variables (`all_vars()`), with the standard default
+  hyper-parameters.
+
+```rust
+    for epoch in 1..=EPOCHS {
+        let mut total_loss = 0.0f64;
+        let mut correct = 0usize;
+
+        let mut indices: Vec<usize> = (0..train.len()).collect();
+        indices.shuffle(&mut rand::rng());
+```
+
+- Per epoch: reset metrics and shuffle the sample order.
+
+```rust
+        for &index in &indices {
+            let (embedding, label) = &train[index];
+
+            let input = Tensor::new(embedding.as_slice(), &device)?.reshape((1, classifier.hidden_size))?;
+            let target = Tensor::new(&[*label as u32], &device)?;
+
+            let logits = classifier.linear.forward(&input)?;
+            let loss = cross_entropy(&logits, &target)?;
+
+            let loss_value = loss.to_scalar::<f32>()?;
+            total_loss += loss_value as f64;
+
+            let prediction = argmax_row(&logits)?;
+            if prediction == *label {
+                correct += 1;
+            }
+
+            optimizer.backward_step(&loss)?;
+        }
+```
+
+- **Online (per-sample) SGD-style updates.** Each iteration reshapes one embedding to
+  `[1, hidden]`, computes logits `[1, classes]`, the cross-entropy loss, and immediately calls
+  `backward_step`, which runs backprop *and* the optimiser step.
+- Accuracy is counted from `argmax` of the logits.
+
+```rust
+        let train_accuracy = if train.is_empty() { 0.0 } else { correct as f64 / train.len() as f64 };
+        let validation_accuracy = evaluate_classifier(classifier, validation)?;
+        let average_loss = if train.is_empty() { 0.0 } else { total_loss / train.len() as f64 };
+
+        println!(
+            "epoch {:>2}/{:<2} | loss {:.4} | train {:.2}% | validation {:.2}%",
+            epoch, EPOCHS, average_loss, train_accuracy * 100.0, validation_accuracy * 100.0,
+        );
+```
+
+- Prints an average loss and both accuracies each epoch, so the effect of training is visible.
+
+### 19. `evaluate_classifier` (Lines 817-846)
+
+```rust
+    for (embedding, label) in dataset {
+        let input = Tensor::new(embedding.as_slice(), &device)?.reshape((1, classifier.hidden_size))?;
+        let logits = classifier.linear.forward(&input)?;
+        let prediction = argmax_row(&logits)?;
+
+        if prediction == *label {
+            correct += 1;
+        }
+    }
+
+    Ok(correct as f64 / dataset.len() as f64)
+```
+
+- Forward-only pass (no optimizer step); returns the fraction of correctly classified samples.
+
+### 20. `argmax_row` (Lines 852-867)
+
+```rust
+    let values = logits.flatten_all()?.to_vec1::<f32>()?;
+
+    let mut best_index = 0usize;
+    let mut best_value = f32::NEG_INFINITY;
+
+    for (index, &value) in values.iter().enumerate() {
+        if value > best_value {
+            best_value = value;
+            best_index = index;
+        }
+    }
+```
+
+- Flattens the `[1, classes]` logits and returns the index of the largest value. Ties resolve
+  to the lowest index.
+
+### 21. `predict` (Lines 873-925)
+
+```rust
+    let embedding = encode_text(encoder, text)?;
+    let input = Tensor::new(embedding.as_slice(), &device)?.reshape((1, classifier.hidden_size))?;
+    let logits = classifier.linear.forward(&input)?;
+```
+
+- Encode -> reshape -> head, producing `[1, classes]` logits.
+
+```rust
+    let probabilities = candle_nn::ops::softmax(&logits, 1)?;
+    let probabilities = probabilities.flatten_all()?.to_vec1::<f32>()?;
+
+    let mut best_index = 0usize;
+    let mut best_probability = f32::NEG_INFINITY;
+    for (index, &probability) in probabilities.iter().enumerate() {
+        if probability > best_probability {
+            best_probability = probability;
+            best_index = index;
+        }
+    }
+
+    Ok((best_index, probabilities))
+```
+
+- `softmax` turns logits into a probability distribution over classes. Returns the winning
+  index **and** the whole probability vector so the CLI can print every class.
+
+### 22. `interactive_loop` (Lines 931-1008)
+
+```rust
+    for (index, label) in labels.iter().enumerate() {
+        println!("  {} -> {}", index, label);
+    }
+```
+
+- Prints the class-id mapping so the user knows what each id means.
+
+```rust
+    loop {
+        print!("text> ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        stdin.read_line(&mut input)?;
+
+        let input = input.trim();
+
+        if input.eq_ignore_ascii_case("exit") || input.eq_ignore_ascii_case("quit") {
+            println!("Goodbye.");
+            break;
+        }
+
+        if input.is_empty() {
+            continue;
+        }
+```
+
+- Standard REPL: prompt, flush so the prompt is visible, read a line, and handle `exit`/`quit`
+  and empty input.
+
+```rust
+        match predict(encoder, classifier, input) {
+            Ok((class_id, probabilities)) => {
+                println!("Prediction: {}", labels[class_id]);
+
+                for (index, probability) in probabilities.iter().enumerate() {
+                    println!("  {:<20} {:.2}%", labels[index], probability * 100.0);
+                }
+
+                let confidence = probabilities[class_id];
+                println!("Confidence: {:.2}%", confidence * 100.0);
+
+                if confidence < CONFIDENCE_THRESHOLD {
+                    println!("Warning: low confidence.");
+                    println!("The text may be outside the training domains.");
+                }
+            }
+            Err(error) => eprintln!("Prediction error: {error:#}"),
+        }
+```
+
+- Prints the predicted label, the full probability table, the confidence, and a warning when
+  the confidence is below `CONFIDENCE_THRESHOLD` (0.60).
+
+---
+
+## Running the Example
+
+The model files must already exist in `models/` (this example does **not** download them).
+
+```bash
+cd examples/text-classification
+cargo run
+```
+
+The first run trains and saves the classifier. Subsequent runs detect
+`models/classifier_h{hidden}_c{classes}.safetensors` and load it instead of training.
+
+To force a fresh training run:
+
+```bash
+rm models/classifier_h*_c*.safetensors
+cargo run
+```
+
+## Expected Output
+
+```text
+============================================================
+              Rust Text Classification with Bert
+============================================================
+
+Fixed configuration:
+  Dataset : data/dataset.csv
+  Config  : models/config.json
+  Weights : models/model.safetensors
+  Vocab   : models/vocab.txt
+
+Loading dataset...
+  data/dataset.csv
+
+Loaded N samples.
+Found K classes.
+
+Dataset statistics:
+  Total samples: N
+    0. programming        ...
+    1. ...
+
+Model configuration:
+  hidden size     : 128
+  layers          : 2
+  attention heads : 2
+  vocabulary      : 30522
+Tokenizer ready.
+
+Loading BERT weights...
+  models/model.safetensors
+BERT model loaded.
+
+Classifier:
+  models/classifier_h128_cK.safetensors
+
+No trained classifier found.
+Starting classifier training...
+
+Encoding training samples...
+  encoded 10/...
+...
+Training classifier...
+Classifier architecture:
+  input  : 128
+  output : K
+
+epoch  1/10 | loss 1.xxxx | train xx.xx% | validation xx.xx%
+...
+epoch 10/10 | loss 0.xxxx | train 100.00% | validation 100.00%
+
+============================================================
+Classifier saved:
+  models/classifier_h128_cK.safetensors
+============================================================
+
+============================================================
+                  Interactive Prediction
+============================================================
+
+Classes:
+  0 -> programming
+  1 -> ...
+
+Type text and press Enter.
+Type 'exit' or 'quit' to stop.
+
+text> The server crashed after a memory leak
+Prediction: programming
+
+Probabilities:
+  programming          98.42%
+  ...
+
+Confidence: 98.42%
+```
+
+## Key Concepts
+
+1. **Feature extraction + linear probe** — freeze the encoder, cache embeddings once, train a
+   tiny head. Far cheaper than fine-tuning the whole transformer.
+2. **WordPiece built from `vocab.txt`** — shows the individual tokenizer components
+   (normalizer, pre-tokenizer, post-processor, truncation, padding) rather than hiding them
+   behind a `tokenizer.json`.
+3. **Deterministic label ordering** — `BTreeSet` guarantees the same class ids across runs.
+4. **Separate parameter store** — `VarMap` makes the head independently saveable/loadable
+   while the BERT weights stay in a read-only memory map.
+5. **Shape discipline** — fixed `MAX_LENGTH` padding plus explicit length assertions keep the
+   tensor shapes predictable.
+
+## Notes and Limitations
+
+- The encoder is frozen: `model.safetensors` is never updated, so quality is bounded by the
+  pretrained BERT and the expressiveness of a single linear layer.
+- Training uses one sample per optimiser step (batch size 1) and a non-seeded RNG, so results
+  are not perfectly reproducible. Use a seeded `StdRng` and/or mini-batches for stability.
+- There is no early stopping or learning-rate schedule; `EPOCHS` and `LEARNING_RATE` are the
+  only knobs.
+- All inputs are padded to 64 tokens even when much shorter, which is simple but wasteful.

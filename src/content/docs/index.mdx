@@ -1,0 +1,42 @@
+---
+title: Rust AI Examples
+description: A collection of practical AI/ML examples in Rust
+template: splash
+hero:
+  tagline: Practical AI and Machine Learning examples in Rust 🦀🤖
+  image:
+    file: ../../assets/houston.webp
+  actions:
+    - text: Getting Started
+      link: /introduction/getting-started/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/ammarsalahi/rust-ai-examples
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Example Categories
+
+<CardGrid stagger>
+  <Card title="Machine Learning" icon="chart-bar" href="/machine-learning/">
+    Traditional ML algorithms: Decision Trees, Linear Regression, KNN
+  </Card>
+  <Card title="Deep Learning" icon="network" href="/deep-learning/">
+    Neural networks: ResNet, TrOCR with Candle
+  </Card>
+  <Card title="Natural Language Processing" icon="chat-bubble" href="/nlp/">
+    Text processing: BERT, DistilBERT, TF-IDF, Language Detection
+  </Card>
+  <Card title="Reference" icon="book" href="/reference/">
+    API reference and technical documentation
+  </Card>
+</CardGrid>
+
+## Quick Links
+
+- [Getting Started](/introduction/getting-started/) - How to run the examples
+- [Project Overview](/introduction/overview/) - Complete project description
+- [GitHub Repository](https://github.com/ammarsalahi/rust-ai-examples) - Source code and issues

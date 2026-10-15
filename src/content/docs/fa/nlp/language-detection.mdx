@@ -1,0 +1,585 @@
+---
+title: تشخیص زبان
+description: شناسایی زبان مبتنی بر رگرسیون لجستیک با ویژگی‌های n-gram کاراکتری با استفاده از Linfa
+---
+
+# تشخیص زبان
+
+## مرور کلی
+
+این مثال شناسایی زبان مبتنی بر رگرسیون لجستیک را با ویژگی‌های n-gram کاراکتری و با استفاده از [Linfa](https://github.com/rust-ml/linfa) نشان می‌دهد.
+
+## کد منبع
+
+- [examples/language-detection/src/main.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/language-detection/src/main.rs)
+- [examples/language-detection/src/model.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/language-detection/src/model.rs)
+- [examples/language-detection/src/dataset.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/language-detection/src/dataset.rs)
+
+## ساختار پروژه
+
+```text
+examples/language-detection/
+├── Cargo.toml                 # Crate manifest and dependencies
+├── src/
+│   ├── main.rs                # Interactive CLI: load, train, predict loop (84 lines)
+│   ├── dataset.rs             # Flexible JSON loader -> Vec<LanguageSample> (52 lines)
+│   └── model.rs               # N-gram features, TF-IDF, logistic regression (265 lines)
+└── data/
+    └── languages.json         # Training samples: { text, language }
+```
+
+| مسیر | نقش |
+|------|------|
+| `Cargo.toml` | crate ‌ی `language-detection` و وابستگی‌های آن را تعریف می‌کند |
+| `src/main.rs` | نقطه‌ی ورود و حلقه‌ی خواندن-ارزیابی-چاپ |
+| `src/dataset.rs` | نمونه‌های آموزشی را از چند ساختار JSON ممکن بارگذاری می‌کند |
+| `src/model.rs` | `LanguageModel`: استخراج ویژگی، بردارسازی، آموزش، پیش‌بینی |
+| `data/languages.json` | جملات برچسب‌دار به چندین زبان |
+
+## وابستگی‌ها
+
+| Crate | نسخه | هدف |
+|-------|---------|---------|
+| `anyhow` | 1 | مدیریت خطا |
+| `linfa` | 0.8.1 | trait‌های `Dataset` و `Fit` |
+| `linfa-logistic` | 0.8.1 | `MultiLogisticRegression` |
+| `ndarray` | 0.16 | ماتریس ویژگی و بردار هدف |
+| `serde` | 1 | `Deserialize` برای `LanguageSample` (به‌همراه نام‌های مستعار فیلد) |
+| `serde_json` | 1 | تجزیه‌ی `languages.json` |
+
+## قالب مجموعه‌داده
+
+`data/languages.json` یک آرایه‌ی JSON است؛ بارگذار همچنین `{ "data": [...] }` یا
+`{ "samples": [...] }` و نام‌های مستعار فیلد (`content`/`sentence` برای متن،
+`label`/`lang`/`language_code` برای زبان) را هم می‌پذیرد:
+
+```json
+[
+  { "text": "Hello, how are you today?", "language": "English" },
+  { "text": "The weather is very nice this morning.", "language": "English" },
+  { "text": "Bonjour, comment allez-vous?", "language": "French" }
+]
+```
+
+## الگوریتم
+
+تشخیص زبان از **n-gram‌های کاراکتری** به‌عنوان ویژگی‌ها و **رگرسیون لجستیک** به‌عنوان طبقه‌بند استفاده می‌کند. n-gram‌های کاراکتری الگوهای آماری توالی کاراکترها را که مختص هر زبان هستند، به‌تصویر می‌کشند.
+
+## جزئیات پیاده‌سازی
+
+- **کتابخانه**: Linfa (linfa, linfa-logistic)
+- **ویژگی‌ها**: n-gram‌های کاراکتری (2 تا 4 گرم)
+- **مدل**: رگرسیون لجستیک چندجمله‌ای
+- **وظیفه**: طبقه‌بندی چندکلاسه (بیش از 50 زبان)
+- **انتخاب ویژگی**: 4000 n-gram برتر بر اساس فراوانی سند
+- **وزن‌دهی**: TF-IDF با نرمال‌سازی L2
+
+## اجرای مثال
+
+```bash
+cd examples/language-detection
+cargo run
+```
+
+## گام‌به‌گام کد (خط به خط)
+
+### dataset.rs - بارگذاری مجموعه‌داده (خطوط 1 تا 52)
+
+```rust
+use anyhow::{Context, Result, anyhow};
+use serde::Deserialize;
+use serde_json::Value;
+use std::fs;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LanguageSample {
+    #[serde(alias = "content", alias = "sentence")]
+    pub text: String,
+
+    #[serde(alias = "label", alias = "lang", alias = "language_code")]
+    pub language: String,
+}
+
+pub fn load_dataset(path: &str) -> Result<Vec<LanguageSample>> {
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("Failed to read dataset: {path}"))?;
+
+    let json: Value =
+        serde_json::from_str(&contents).with_context(|| format!("Invalid JSON in {path}"))?;
+
+    let records = if json.is_array() {
+        json
+    } else if let Some(data) = json.get("data") {
+        data.clone()
+    } else if let Some(samples) = json.get("samples") {
+        samples.clone()
+    } else {
+        return Err(anyhow!(
+            "Expected a JSON array or an object containing 'data' or 'samples'"
+        ));
+    };
+
+    let samples: Vec<LanguageSample> = serde_json::from_value(records)
+        .context("Dataset records must contain text and language fields")?;
+
+    let samples: Vec<LanguageSample> = samples
+        .into_iter()
+        .filter(|sample| !sample.text.trim().is_empty() && !sample.language.trim().is_empty())
+        .map(|mut sample| {
+            sample.text = sample.text.trim().to_string();
+            sample.language = sample.language.trim().to_string();
+            sample
+        })
+        .collect();
+
+    if samples.is_empty() {
+        return Err(anyhow!("No valid training samples were found"));
+    }
+
+    Ok(samples)
+}
+```
+
+**تجزیه‌ی منعطف JSON (خطوط 15 تا 32):**
+- چند قالب JSON را می‌پذیرد: آرایه، `{data: [...]}` یا `{samples: [...]}`
+- نام‌های مستعار فیلد برای متن: `content`، `sentence`، `text`
+- نام‌های مستعار فیلد برای برچسب: `label`، `lang`، `language_code`
+
+### model.rs - مدل اصلی (خطوط 1 تا 265)
+
+#### ثابت‌ها و انواع (خطوط 1 تا 14)
+
+```rust
+use anyhow::{Result, anyhow};
+use linfa::prelude::*;
+use linfa_logistic::{MultiFittedLogisticRegression, MultiLogisticRegression};
+use ndarray::{Array1, Array2};
+use std::collections::{BTreeSet, HashMap};
+
+use crate::dataset::LanguageSample;
+
+const MIN_NGRAM: usize = 2;
+const MAX_NGRAM: usize = 4;
+const MAX_FEATURES: usize = 4_000;
+
+type TrainedClassifier = MultiFittedLogisticRegression<f64, usize>;
+```
+
+- **بازه‌ی n-gram**: 2 تا 4 (بی‌گرام‌ها، تری‌گرام‌ها، 4-گرام‌ها)
+- **حداکثر ویژگی‌ها**: 4000 (سقف اندازه‌ی واژگان)
+
+#### ساختار LanguageModel (خطوط 15 تا 20)
+
+```rust
+pub struct LanguageModel {
+    vocabulary: HashMap<String, usize>,  // n-gram -> feature index
+    idf: Vec<f64>,                       // IDF weight per feature
+    languages: Vec<String>,              // Class labels (sorted)
+    classifier: TrainedClassifier,       // Trained logistic regression
+}
+```
+
+#### خط لوله‌ی آموزش (خطوط 22 تا 149)
+
+```rust
+    pub fn train(samples: &[LanguageSample]) -> Result<Self> {
+        // Remove invalid samples.
+        let valid_samples: Vec<&LanguageSample> = samples
+            .iter()
+            .filter(|sample| !sample.language.trim().is_empty() && !sample.text.trim().is_empty())
+            .collect();
+
+        if valid_samples.len() < 2 {
+            return Err(anyhow!("At least two valid training samples are required"));
+        }
+
+        // Build a deterministic list of language labels.
+        let mut language_set = BTreeSet::new();
+
+        for sample in &valid_samples {
+            language_set.insert(sample.language.trim().to_string());
+        }
+
+        let languages: Vec<String> = language_set.into_iter().collect();
+
+        if languages.len() < 2 {
+            return Err(anyhow!("Training requires at least two distinct languages"));
+        }
+
+        // Encode language labels as integers.
+        let language_ids: HashMap<String, usize> = languages
+            .iter()
+            .enumerate()
+            .map(|(id, language)| (language.clone(), id))
+            .collect();
+
+        // Extract character n-grams from each document.
+        let documents: Vec<Vec<String>> = valid_samples
+            .iter()
+            .map(|sample| extract_ngrams(&sample.text))
+            .collect();
+
+        // Calculate document frequency for every feature.
+        let mut document_frequency: HashMap<String, usize> = HashMap::new();
+
+        for document in &documents {
+            let unique_features: BTreeSet<&str> = document.iter().map(String::as_str).collect();
+
+            for feature in unique_features {
+                *document_frequency.entry(feature.to_string()).or_insert(0) += 1;
+            }
+        }
+
+        // Rank features by document frequency.
+        let mut ranked_features: Vec<(String, usize)> = document_frequency
+            .iter()
+            .map(|(feature, frequency)| (feature.clone(), *frequency))
+            .collect();
+
+        ranked_features.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+        ranked_features.truncate(MAX_FEATURES);
+
+        // Create a stable vocabulary.
+        let mut selected_features: Vec<String> = ranked_features
+            .into_iter()
+            .map(|(feature, _)| feature)
+            .collect();
+
+        selected_features.sort();
+
+        if selected_features.is_empty() {
+            return Err(anyhow!(
+                "No character n-grams found. Use longer training texts."
+            ));
+        }
+
+        let vocabulary: HashMap<String, usize> = selected_features
+            .iter()
+            .enumerate()
+            .map(|(index, feature)| (feature.clone(), index))
+            .collect();
+
+        // Calculate smoothed IDF.
+        //
+        // IDF(t) = ln((N + 1) / (DF(t) + 1)) + 1
+        let document_count = documents.len() as f64;
+
+        let idf: Vec<f64> = selected_features
+            .iter()
+            .map(|feature| {
+                let df = *document_frequency.get(feature).unwrap_or(&0) as f64;
+
+                ((document_count + 1.0) / (df + 1.0)).ln() + 1.0
+            })
+            .collect();
+
+        // Build the dense TF-IDF feature matrix.
+        let mut feature_values = Vec::with_capacity(documents.len() * vocabulary.len());
+
+        for document in &documents {
+            let vector = vectorize(document, &vocabulary, &idf);
+
+            feature_values.extend(vector);
+        }
+
+        let records = Array2::from_shape_vec((documents.len(), vocabulary.len()), feature_values)
+            .map_err(|error| anyhow!("Failed to create feature matrix: {error}"))?;
+
+        // Convert labels to class IDs.
+        let targets = Array1::from(
+            valid_samples
+                .iter()
+                .map(|sample| language_ids[sample.language.trim()])
+                .collect::<Vec<usize>>(),
+        );
+
+        let dataset = Dataset::new(records, targets);
+
+        // Train multinomial logistic regression.
+        let classifier = MultiLogisticRegression::default()
+            .max_iterations(200)
+            .fit(&dataset)
+            .map_err(|error| anyhow!("Logistic regression training failed: {error}"))?;
+
+        Ok(Self {
+            vocabulary,
+            idf,
+            languages,
+            classifier,
+        })
+    }
+```
+
+**مراحل آموزش:**
+1. **خطوط 24 تا 32**: پالایش نمونه‌های معتبر (متن و زبان غیرخالی)
+2. **خطوط 34 تا 45**: ساخت مجموعه‌ی برچسب قطعی (BTreeSet برای ترتیب یکنواخت)
+3. **خطوط 47 تا 52**: نگاشت زبان‌ها به شناسه‌های عددی
+4. **خطوط 54 تا 58**: استخراج n-gram‌ها از همه‌ی اسناد
+5. **خطوط 60 تا 69**: محاسبه‌ی فراوانی سند (دودویی - یک بار در هر سند)
+6. **خطوط 71 تا 79**: رتبه‌بندی بر اساس DF و نگه‌داشتن 4000 مورد برتر
+7. **خطوط 81 تا 93**: مرتب‌سازی الفبایی واژگان برای قطعیت
+8. **خطوط 95 تا 113**: محاسبه‌ی وزن‌های هموارشده‌ی IDF
+9. **خطوط 115 تا 125**: ساخت ماتریس متراکم TF-IDF (اسناد × واژگان)
+10. **خطوط 127 تا 133**: تبدیل برچسب‌ها به اندیس‌های کلاس
+11. **خطوط 135 تا 141**: آموزش رگرسیون لجستیک چندجمله‌ای (حداکثر 200 تکرار)
+
+#### پیش‌بینی (خطوط 159 تا 203)
+
+```rust
+    pub fn predict(&self, text: &str) -> Option<(String, f64)> {
+        if text.trim().is_empty() {
+            return None;
+        }
+
+        let features = extract_ngrams(text);
+
+        if features.is_empty() {
+            return None;
+        }
+
+        // Use the same vocabulary and IDF as training.
+        let vector = vectorize(&features, &self.vocabulary, &self.idf);
+
+        // Reject inputs that have no known features.
+        if vector.iter().all(|value| *value == 0.0) {
+            return None;
+        }
+
+        let records = Array2::from_shape_vec((1, self.vocabulary.len()), vector).ok()?;
+
+        let probabilities = self.classifier.predict_probabilities(&records);
+
+        // Select the class with the highest predicted probability.
+        let mut best: Option<(usize, f64)> = None;
+
+        for (column, &class_id) in self.classifier.classes().iter().enumerate() {
+            if column >= probabilities.ncols() || class_id >= self.languages.len() {
+                continue;
+            }
+
+            let probability = probabilities[[0, column]];
+
+            if best.map_or(true, |(_, best_probability)| probability > best_probability) {
+                best = Some((class_id, probability));
+            }
+        }
+
+        let (class_id, probability) = best?;
+
+        Some((
+            self.languages[class_id].clone(),
+            probability.clamp(0.0, 1.0),
+        ))
+    }
+```
+
+**خط لوله‌ی پیش‌بینی:**
+1. **خطوط 160 تا 168**: استخراج n-gram‌ها و مدیریت ورودی خالی
+2. **خط 171**: بردارسازی با استفاده از واژگان و IDF آموزش
+3. **خطوط 174 تا 176**: رد کردن در صورت نبود ویژگی شناخته‌شده (همه صفر)
+4. **خطوط 178 تا 195**: دریافت احتمال‌ها و یافتن کلاس با بیشترین احتمال
+5. **خطوط 197 تا 202**: بازگرداندن نام زبان و اطمینان
+
+#### توابع کمکی (خطوط 206 تا 265)
+
+```rust
+// Convert character n-grams into a normalized TF-IDF vector.
+fn vectorize(features: &[String], vocabulary: &HashMap<String, usize>, idf: &[f64]) -> Vec<f64> {
+    let mut counts: HashMap<usize, usize> = HashMap::new();
+
+    let mut known_feature_count = 0usize;
+
+    for feature in features {
+        if let Some(&index) = vocabulary.get(feature) {
+            *counts.entry(index).or_insert(0) += 1;
+            known_feature_count += 1;
+        }
+    }
+
+    let mut vector = vec![0.0; vocabulary.len()];
+
+    if known_feature_count == 0 {
+        return vector;
+    }
+
+    // TF-IDF = term frequency * inverse document frequency.
+    for (index, count) in counts {
+        let tf = count as f64 / known_feature_count as f64;
+
+        vector[index] = tf * idf[index];
+    }
+
+    // L2 normalization.
+    let norm = vector.iter().map(|value| value * value).sum::<f64>().sqrt();
+
+    if norm > 0.0 {
+        for value in &mut vector {
+            *value /= norm;
+        }
+    }
+
+    vector
+}
+
+// Extract character n-grams of lengths 2, 3, and 4.
+fn extract_ngrams(text: &str) -> Vec<String> {
+    let normalized: Vec<char> = text
+        .to_lowercase()
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+
+    let mut features = Vec::new();
+
+    for n in MIN_NGRAM..=MAX_NGRAM {
+        if normalized.len() < n {
+            continue;
+        }
+
+        for window in normalized.windows(n) {
+            features.push(window.iter().collect::<String>());
+        }
+    }
+
+    features
+}
+```
+
+**vectorize() (خطوط 207 تا 242):**
+- شمارش رخداد n-gram‌های شناخته‌شده
+- TF = شمارش / کل ویژگی‌های شناخته‌شده
+- TF-IDF = TF × IDF
+- نرمال‌سازی L2 بردار نهایی
+
+**extract_ngrams() (خطوط 244 تا 265):**
+- تبدیل به حروف کوچک و حذف فاصله‌ها
+- استخراج پنجره‌های هم‌پوشان با اندازه‌های 2، 3 و 4
+- بازگرداندن همه‌ی n-gram‌ها به‌صورت رشته
+
+### main.rs - رابط خط فرمان تعاملی (خطوط 1 تا 84)
+
+```rust
+mod dataset;
+mod model;
+
+use anyhow::{Context, Result};
+use std::io::{self, Write};
+
+use crate::dataset::load_dataset;
+use crate::model::LanguageModel;
+
+fn main() -> Result<()> {
+    let dataset_path = "data/languages.json";
+
+    println!("==================================");
+    println!("     Rust Language Detection");
+    println!("==================================");
+    println!();
+
+    // Load the training dataset.
+    let samples = load_dataset(dataset_path)
+        .with_context(|| format!("Could not load dataset from {dataset_path}"))?;
+
+    println!("Loaded {} training samples.", samples.len());
+
+    // Train the machine-learning model.
+    println!("Training logistic regression...");
+
+    let model = LanguageModel::train(&samples)?;
+
+    println!("Training completed.");
+    println!();
+
+    println!("Number of languages: {}", model.language_count());
+
+    println!("Vocabulary size: {}", model.vocabulary_size());
+
+    println!();
+    println!("Enter text to detect its language.");
+    println!("Type 'exit' or 'quit' to stop.");
+    println!();
+
+    let stdin = io::stdin();
+
+    loop {
+        print!("text> ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+
+        if stdin.read_line(&mut input)? == 0 {
+            break;
+        }
+
+        let input = input.trim();
+
+        if input.eq_ignore_ascii_case("exit") || input.eq_ignore_ascii_case("quit") {
+            println!("Goodbye!");
+            break;
+        }
+
+        if input.is_empty() {
+            continue;
+        }
+
+        match model.predict(input) {
+            Some((language, score)) => {
+                println!("Predicted language: {language}");
+
+                println!("Model score: {:.2}%", score * 100.0);
+            }
+
+            None => {
+                println!(
+                    "Unable to predict the language. \
+                     The text may be too short or contain \
+                     no known character features."
+                );
+            }
+        }
+
+        println!();
+    }
+
+    Ok(())
+}
+```
+
+## ویژگی‌های n-gram
+
+- **یونی‌گرام‌ها** (1-gram): کاراکترهای تکی - استفاده نمی‌شوند
+- **بی‌گرام‌ها** (2-gram): جفت کاراکترها - مانند "th"، "he"، "in" و غیره
+- **تری‌گرام‌ها** (3-gram): سه‌گانه‌های کاراکتری - مانند "the"، "ing"، "ion" و غیره
+- **4-گرام‌ها**: چهارگانه‌های کاراکتری - مانند "tion"، "ment"، "ence" و غیره
+
+n-gram‌های مرتبه‌ی بالاتر الگوهای ویژه‌تر زبان را به‌تصویر می‌کشند، اما به داده‌ی بیشتری نیاز دارند.
+
+## خروجی مورد انتظار
+
+```
+==================================
+     Rust Language Detection
+==================================
+
+Loaded 1000 training samples.
+Training logistic regression...
+Training completed.
+
+Number of languages: 15
+Vocabulary size: 4000
+
+Enter text to detect its language.
+Type 'exit' or 'quit' to stop.
+
+text> Hello, how are you today?
+Predicted language: English
+Model score: 98.76%
+
+text> Bonjour, comment allez-vous?
+Predicted language: French
+Model score: 95.23%
+
+text> exit
+Goodbye!
+```

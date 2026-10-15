@@ -1,0 +1,201 @@
+---
+title: طبقه‌بندی هرزنامه ایمیل
+description: دارایی‌های یک طبقه‌بند هرزنامه/غیرهرزنامه مبتنی بر BERT با Candle و tokenizers (کد منبع هنوز پیاده‌سازی نشده است)
+---
+
+# طبقه‌بندی هرزنامه ایمیل
+
+## وضعیت
+
+:::caution[کار در جریان — هنوز قابل اجرا نیست]
+این مثال در حال حاضر **فقط دارایی‌ها و وابستگی‌ها** را در بر می‌گیرد: یک مجموعه‌داده، یک
+چک‌پوینت BERT تنظیم‌شده، فایل‌های tokenizer و یک `Cargo.toml`. **هیچ پوشه `src/` وجود ندارد**،
+بنابراین `cargo run` با پیام *"no targets ... in the manifest"* شکست می‌خورد. این صفحه مستند می‌کند
+که چه چیزهایی موجود است، فایل‌ها چه محتوایی دارند، و انتظار می‌رود کد Rust غایب چگونه سیم‌کشی شود.
+:::
+
+برخلاف سایر مثال‌های این مخزن، این مثال هنوز `src/main.rs` ندارد.
+
+## ساختار مثال (فعلی)
+
+```text
+examples/email-spam-classification/
+├── Cargo.toml                      # Dependencies are declared, but no binary target exists
+├── data/
+│   ├── spam.csv                    # Raw CSV: title,text,type
+│   └── spam.json                   # JSON array: { text, is_spam }
+└── models/
+    ├── config.json                 # BERT config for BertForSequenceClassification
+    ├── model.safetensors           # Fine-tuned weights (17 MB)
+    ├── vocab.txt                   # WordPiece vocabulary (30522 tokens)
+    ├── tokenizer_config.json       # Tokenizer settings (do_lower_case, special tokens)
+    └── special_tokens_map.json     # Maps [UNK]/[SEP]/[PAD]/[CLS]/[MASK]
+```
+
+`find examples/email-spam-classification -name '*.rs'` هیچ‌چیزی برنمی‌گرداند — هنوز هیچ کد منبع Rust وجود ندارد.
+
+## وابستگی‌ها (اعلام‌شده در `Cargo.toml`)
+
+| Crate | نسخه | کاربرد موردنظر |
+|-------|---------|--------------|
+| `anyhow` | 1 | مدیریت خطا |
+| `ahash` | 0.8 | نگاشت‌های هش سریع |
+| `candle-core` | 0.9 | تنسورها، `Device`، `DType` |
+| `candle-nn` | 0.9 | `Linear`، `VarBuilder`، softmax |
+| `candle-transformers` | 0.9 | `bert::BertModel` |
+| `safetensors` | 0.5 | خواندن فراداده‌های `.safetensors` |
+| `tokenizers` | 0.21 | توکن‌ساز WordPiece |
+| `csv` | 1 | خواندن `data/spam.csv` |
+| `serde` / `serde_json` | 1 | تجزیه مجموعه‌داده و پیکربندی |
+
+## مجموعه‌داده
+
+### `data/spam.csv`
+
+یک پیکره متعارف هرزنامه با یک ردیف سرصفحه و سه ستون:
+
+```csv
+title,text,type
+?? the secrets to SUCCESS,"Hi James,
+
+Have you claim your complimentary gift yet?
+..."
+```
+
+- `title` — سطر موضوع ایمیل.
+- `text` — متن کامل بدنه ایمیل (ممکن است شامل خطوط جدید نقل‌شده باشد، از این‌رو رکوردهای چندخطی).
+- `type` — کلاس (مثلاً spam / ham).
+
+### `data/spam.json`
+
+یک خروجی پیش‌پردازش‌شده به‌صورت یک آرایه JSON از رکوردهای `{ text, is_spam }`:
+
+```json
+[{"text": "Subject: naturally irresistible your corporate identity ...", "is_spam": 1}, ...]
+```
+
+- **10,899** رکورد.
+- `is_spam = 1` برای هرزنامه (2,867) و `is_spam = 0` برای غیرهرزنامه (8,032) — تقریباً یک تقسیم ۲۶/۷۴،
+  بنابراین کلاس‌ها **نامتوازن** هستند و دقت به‌تنهایی گمراه‌کننده خواهد بود.
+
+## مدل
+
+`models/model.safetensors` یک BERT کوچک تنظیم‌شده است. سرصفحه آن (۴۳ تنسور) شامل موارد زیر است:
+
+| Tensor | Shape | معنا |
+|--------|-------|---------|
+| `bert.embeddings.word_embeddings.weight` | `[30522, 128]` | جاسازی‌های توکن |
+| `bert.encoder.layer.0..1.*` | — | دو لایه ترنسفورمر (اندازه پنهان ۱۲۸) |
+| `bert.pooler.dense.weight` | `[128, 128]` | Pooler روی توکن `[CLS]` |
+| `classifier.weight` | `[2, 128]` | سر طبقه‌بندی **دودویی** |
+| `classifier.bias` | `[2]` | دو لاجیت خروجی |
+
+مشاهدات کلیدی که هنگام پیاده‌سازی استنتاج اهمیت دارند:
+
+- تنسورها با پیشوند **`bert.`** هستند (نه `distilbert.`)، بنابراین با
+  `candle_transformers::models::bert::BertModel` که از طریق `vb.pp("bert")` دسترسی می‌یابد بارگذاری می‌شوند.
+- `classifier.weight` دو ردیف دارد، بنابراین مدل یک **طبقه‌بند دودویی هرزنامه/غیرهرزنامه** است، حتی
+  اگرچه `models/config.json` **دارای `num_labels` نیست**. یک بارگذار باید مقدار ۲ را به‌صورت سخت‌کدشده بگذارد یا
+  آن را از شکل وزن استنتاج کند.
+- **هیچ `tokenizer.json`** وجود ندارد — تنها `vocab.txt`، `tokenizer_config.json` و
+  `special_tokens_map.json`. بنابراین توکن‌ساز باید در کد از
+  `vocab.txt` ساخته شود، دقیقاً همان‌طور که مثال [Text Classification](/fa/nlp/text-classification/) انجام می‌دهد.
+
+### `models/config.json` (خلاصه‌شده)
+
+```json
+{
+  "architectures": ["BertForSequenceClassification"],
+  "hidden_size": 128,
+  "num_hidden_layers": 2,
+  "num_attention_heads": 2,
+  "max_position_embeddings": 512,
+  "vocab_size": 30522,
+  "_name_or_path": "/content/drive/MyDrive/spam-ham/checkpoint-447"
+}
+```
+
+`tokenizer_config.json` مقدار `name_or_path` توکن‌ساز را به‌صورت
+`google/bert_uncased_L-2_H-128_A-2` گزارش می‌کند، یعنی معماری "tiny BERT".
+
+## پیاده‌سازی موردنظر
+
+دارایی‌های مدل به‌شدت خط لوله زیر را ایجاب می‌کنند، که آینه سایر مثال‌های Candle
+در این مخزن است:
+
+```text
+example-name/
+├── Cargo.toml
+├── src/
+│   ├── main.rs          # CLI: train / predict / evaluate
+│   ├── dataset.rs       # Load spam.csv or spam.json -> (text, is_spam)
+│   ├── model.rs         # Load BertModel + classifier head, run inference
+│   └── tokenizer.rs     # Build WordPiece tokenizer from vocab.txt
+├── data/
+└── models/
+```
+
+1. **بارگذاری مجموعه‌داده** — خواندن `spam.csv` (`title`/`text` + `type`) یا `spam.json`
+   (`text` + `is_spam`) و نرمال‌سازی برچسب‌ها به `0`/`1`.
+2. **ساخت توکن‌ساز** — ساختن یک توکن‌ساز WordPiece از `vocab.txt` با شناسه‌های
+   `[CLS]/[SEP]/[PAD]/[UNK]` از `special_tokens_map.json`، و برش/پد کردن به یک طول ثابت
+   (مثلاً ۱۲۸).
+3. **بارگذاری مدل** — نگاشت حافظه‌ای `model.safetensors` با `VarBuilder`، ساخت
+   `BertModel::load(vb.pp("bert"), &config)`، و سپس بارگذاری `classifier` به‌صورت
+   `linear(128, 2, vb.pp("classifier"))`.
+4. **پیش‌بینی** — پاس رو به جلو با `input_ids`، `token_type_ids`، `attention_mask`؛ گرفتن خروجی
+   pooler/`[CLS]`، اعمال طبقه‌بند و softmax برای به‌دست آوردن احتمال‌های `[ham, spam]`.
+5. **ارزیابی** — چون داده نامتوازن است، گزارش **دقت، بازخوانی و F1 برای کلاس
+   هرزنامه** در کنار یک ماتریس درهم‌ریختگی، و نه فقط دقت کلی.
+6. **CLI** — یک اعلان تعاملی به‌همراه دستورهای تک‌شات مانند
+   `cargo run -- predict "..."` و `cargo run -- evaluate`.
+
+### ترکیب مدل با سر آموزش
+
+از آنجا که چک‌پوینت *از قبل تنظیم‌شده* برای هرزنامه/غیرهرزنامه است، مثال موردنظر عمدتاً
+**استنتاج** است، نه آموزش: بارگذاری وزن‌ها، طبقه‌بندی پیام‌ها، و ارزیابی روی داده کنارگذاشته‌شده.
+یک مسیر آموزش به‌علاوه `classifier` (و به‌صورت اختیاری خود رمزگذار) را تنظیم دقیق می‌کرد.
+
+## اجرای مثال
+
+هنوز در دسترس نیست. زمانی که `src/main.rs` وجود داشته باشد:
+
+```bash
+cd examples/email-spam-classification
+cargo run
+```
+
+تا آن زمان، تنها می‌توان دارایی‌ها را بررسی کرد:
+
+```bash
+# Inspect the fine-tuned weights header
+python3 - <<'PY'
+import struct, json
+with open("models/model.safetensors", "rb") as f:
+    n = struct.unpack("<Q", f.read(8))[0]
+    header = json.loads(f.read(n))
+print(len(header), "tensors")
+print({k: v["shape"] for k, v in header.items() if "classifier" in k})
+PY
+```
+
+## خروجی موردانتظار (هنگام پیاده‌سازی)
+
+```text
+==================================================
+          EMAIL SPAM CLASSIFIER
+==================================================
+Model: models/model.safetensors
+Task : binary classification (ham / spam)
+
+ham  -> "Hey, are we still meeting at 10?"
+spam -> "CONGRATULATIONS! You have won a free prize, click here!"
+
+Evaluation (spam = positive class):
+Accuracy:  xx.xx%
+Precision: x.xxx
+Recall:    x.xxx
+F1-score:  x.xxx
+```
+
+اعداد دقیق به تقسیم ارزیابی بستگی دارند و تنها جنبه نمونه‌ای دارند.

@@ -1,0 +1,70 @@
+---
+title: شروع به کار
+description: چگونه مثال‌های هوش مصنوعی Rust را اجرا کنیم
+---
+
+# شروع به کار
+
+این مخزن شامل مجموعه‌ای از مثال‌های هوش مصنوعی با Rust است که تکنیک‌های گوناگون یادگیری ماشین، یادگیری عمیق و پردازش زبان طبیعی را نشان می‌دهد.
+
+## پیش‌نیازها
+
+- [Rust](https://www.rust-lang.org/tools/install) (آخرین نسخه پایدار)
+- [Cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html) (همراه با Rust نصب می‌شود)
+
+## اجرای مثال‌ها
+
+هر مثال یک پروژه مستقل Cargo است که در پوشه `examples/` قرار دارد.
+
+```bash
+# Navigate to an example directory
+cd examples/<example-name>
+
+# Run the example
+cargo run
+```
+
+### مثال‌های موجود
+
+| مثال | دسته‌بندی | وضعیت | پیش‌نیازها |
+|---------|----------|--------|----------|
+| [دسته‌بندی متن](/fa/nlp/text-classification/) | NLP | ✅ قابل اجرا | چک‌پوینت BERT در `models/` به‌صورت محلی |
+| [تحلیل احساسات](/fa/nlp/sentiment-analysis/) | NLP | ✅ قابل اجرا | اینترنت (اجرای نخست مدل را دانلود می‌کند) |
+| [تشخیص زبان](/fa/nlp/language-detection/) | NLP | ✅ قابل اجرا | `data/languages.json` |
+| [استخراج کلیدواژه](/fa/nlp/keyword-extraction/) | NLP | ✅ قابل اجرا | فایل‌های `.txt` در `documents/` |
+| [دسته‌بندی هرزنامه ایمیل](/fa/nlp/email-spam-classification/) | NLP | ⚠️ ناقص | فقط دارایی‌ها؛ هنوز کد منبعی وجود ندارد |
+| [طبقه‌بند KNN](/fa/machine-learning/knn-classifier/) | ML | ✅ قابل اجرا | `data/iris.csv` |
+| [طبقه‌بند درخت تصمیم](/fa/machine-learning/decision-tree-classifier/) | ML | ✅ قابل اجرا | `data/loans.csv` |
+| [پیش‌بینی قیمت خانه](/fa/machine-learning/house-price-prediction/) | ML | ✅ قابل اجرا | `data/house.csv` |
+| [دسته‌بندی تصویر](/fa/deep-learning/image-classification/) | DL | ✅ قابل اجرا | اینترنت (اجرای نخست مدل را دانلود می‌کند) + یک تصویر |
+| [OCR](/fa/deep-learning/ocr/) | DL | ⚠️ ناقص | بدون `fn main`؛ استنتاج پیاده‌سازی نشده است |
+
+:::note
+هر صفحه مثال شامل بخش‌های **ساختار پروژه**، **قالب مجموعه‌داده** و یک
+**مرور خط‌به‌خط کد** مخصوص خود است. برای آشنایی با چیدمان کلی از
+[نمای کلی پروژه](/fa/introduction/overview/) شروع کنید.
+:::
+
+### افزودن داده‌های خودتان
+
+بیشتر مثال‌ها یک مسیر ثابت نسبت به پوشه خودشان را می‌خوانند، بنابراین ساده‌ترین راه برای
+آزمودن داده‌های خودتان جایگزین کردن فایل موجود است (با حفظ همان ستون‌ها). مثال‌های مبتنی بر مدل
+یا از پوشه `models/` که در مخزن قرار دارد استفاده می‌کنند یا آن را در اجرای نخست دانلود می‌کنند.
+
+## مستندات
+
+این سایت مستندات با [Astro Starlight](https://starlight.astro.build/) ساخته شده است. برای اجرای آن به‌صورت محلی:
+
+```bash
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+
+# Build for production
+npm run build
+
+# Preview production build
+npm run preview
+```

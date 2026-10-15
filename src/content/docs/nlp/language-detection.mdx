@@ -1,0 +1,585 @@
+---
+title: Language Detection
+description: Logistic regression-based language identification with character n-gram features using Linfa
+---
+
+# Language Detection
+
+## Overview
+
+This example demonstrates logistic regression-based language identification with character n-gram features using [Linfa](https://github.com/rust-ml/linfa).
+
+## Source Code
+
+- [examples/language-detection/src/main.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/language-detection/src/main.rs)
+- [examples/language-detection/src/model.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/language-detection/src/model.rs)
+- [examples/language-detection/src/dataset.rs](https://github.com/ammarsalahi/rust-ai-examples/blob/main/examples/language-detection/src/dataset.rs)
+
+## Project Structure
+
+```text
+examples/language-detection/
+├── Cargo.toml                 # Crate manifest and dependencies
+├── src/
+│   ├── main.rs                # Interactive CLI: load, train, predict loop (84 lines)
+│   ├── dataset.rs             # Flexible JSON loader -> Vec<LanguageSample> (52 lines)
+│   └── model.rs               # N-gram features, TF-IDF, logistic regression (265 lines)
+└── data/
+    └── languages.json         # Training samples: { text, language }
+```
+
+| Path | Role |
+|------|------|
+| `Cargo.toml` | Defines the `language-detection` crate and its dependencies |
+| `src/main.rs` | Entry point and read-eval-print loop |
+| `src/dataset.rs` | Loads training samples from several possible JSON shapes |
+| `src/model.rs` | The `LanguageModel`: feature extraction, vectorization, training, prediction |
+| `data/languages.json` | Labeled sentences in multiple languages |
+
+## Dependencies
+
+| Crate | Version | Purpose |
+|-------|---------|---------|
+| `anyhow` | 1 | Error handling |
+| `linfa` | 0.8.1 | `Dataset` and `Fit` traits |
+| `linfa-logistic` | 0.8.1 | `MultiLogisticRegression` |
+| `ndarray` | 0.16 | Feature matrix and target vector |
+| `serde` | 1 | `Deserialize` for `LanguageSample` (with field aliases) |
+| `serde_json` | 1 | Parsing `languages.json` |
+
+## Dataset Format
+
+`data/languages.json` is a JSON array; the loader also accepts `{ "data": [...] }` or
+`{ "samples": [...] }`, and field aliases (`content`/`sentence` for text,
+`label`/`lang`/`language_code` for the language):
+
+```json
+[
+  { "text": "Hello, how are you today?", "language": "English" },
+  { "text": "The weather is very nice this morning.", "language": "English" },
+  { "text": "Bonjour, comment allez-vous?", "language": "French" }
+]
+```
+
+## Algorithm
+
+Language detection uses **character n-grams** as features and **logistic regression** as the classifier. Character n-grams capture the statistical patterns of character sequences that are unique to each language.
+
+## Implementation Details
+
+- **Library**: Linfa (linfa, linfa-logistic)
+- **Features**: Character n-grams (2-4 grams)
+- **Model**: Multinomial Logistic Regression
+- **Task**: Multi-class classification (50+ languages)
+- **Feature Selection**: Top 4000 n-grams by document frequency
+- **Weighting**: TF-IDF with L2 normalization
+
+## Running the Example
+
+```bash
+cd examples/language-detection
+cargo run
+```
+
+## Code Walkthrough (Line by Line)
+
+### dataset.rs - Dataset Loading (Lines 1-52)
+
+```rust
+use anyhow::{Context, Result, anyhow};
+use serde::Deserialize;
+use serde_json::Value;
+use std::fs;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LanguageSample {
+    #[serde(alias = "content", alias = "sentence")]
+    pub text: String,
+
+    #[serde(alias = "label", alias = "lang", alias = "language_code")]
+    pub language: String,
+}
+
+pub fn load_dataset(path: &str) -> Result<Vec<LanguageSample>> {
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("Failed to read dataset: {path}"))?;
+
+    let json: Value =
+        serde_json::from_str(&contents).with_context(|| format!("Invalid JSON in {path}"))?;
+
+    let records = if json.is_array() {
+        json
+    } else if let Some(data) = json.get("data") {
+        data.clone()
+    } else if let Some(samples) = json.get("samples") {
+        samples.clone()
+    } else {
+        return Err(anyhow!(
+            "Expected a JSON array or an object containing 'data' or 'samples'"
+        ));
+    };
+
+    let samples: Vec<LanguageSample> = serde_json::from_value(records)
+        .context("Dataset records must contain text and language fields")?;
+
+    let samples: Vec<LanguageSample> = samples
+        .into_iter()
+        .filter(|sample| !sample.text.trim().is_empty() && !sample.language.trim().is_empty())
+        .map(|mut sample| {
+            sample.text = sample.text.trim().to_string();
+            sample.language = sample.language.trim().to_string();
+            sample
+        })
+        .collect();
+
+    if samples.is_empty() {
+        return Err(anyhow!("No valid training samples were found"));
+    }
+
+    Ok(samples)
+}
+```
+
+**Flexible JSON Parsing (Lines 15-32):**
+- Accepts multiple JSON formats: array, `{data: [...]}`, or `{samples: [...]}`
+- Field aliases for text: `content`, `sentence`, `text`
+- Field aliases for label: `label`, `lang`, `language_code`
+
+### model.rs - Core Model (Lines 1-265)
+
+#### Constants and Types (Lines 1-14)
+
+```rust
+use anyhow::{Result, anyhow};
+use linfa::prelude::*;
+use linfa_logistic::{MultiFittedLogisticRegression, MultiLogisticRegression};
+use ndarray::{Array1, Array2};
+use std::collections::{BTreeSet, HashMap};
+
+use crate::dataset::LanguageSample;
+
+const MIN_NGRAM: usize = 2;
+const MAX_NGRAM: usize = 4;
+const MAX_FEATURES: usize = 4_000;
+
+type TrainedClassifier = MultiFittedLogisticRegression<f64, usize>;
+```
+
+- **N-gram range**: 2-4 (bigrams, trigrams, 4-grams)
+- **Max features**: 4000 (vocabulary size limit)
+
+#### LanguageModel Struct (Lines 15-20)
+
+```rust
+pub struct LanguageModel {
+    vocabulary: HashMap<String, usize>,  // n-gram -> feature index
+    idf: Vec<f64>,                       // IDF weight per feature
+    languages: Vec<String>,              // Class labels (sorted)
+    classifier: TrainedClassifier,       // Trained logistic regression
+}
+```
+
+#### Training Pipeline (Lines 22-149)
+
+```rust
+    pub fn train(samples: &[LanguageSample]) -> Result<Self> {
+        // Remove invalid samples.
+        let valid_samples: Vec<&LanguageSample> = samples
+            .iter()
+            .filter(|sample| !sample.language.trim().is_empty() && !sample.text.trim().is_empty())
+            .collect();
+
+        if valid_samples.len() < 2 {
+            return Err(anyhow!("At least two valid training samples are required"));
+        }
+
+        // Build a deterministic list of language labels.
+        let mut language_set = BTreeSet::new();
+
+        for sample in &valid_samples {
+            language_set.insert(sample.language.trim().to_string());
+        }
+
+        let languages: Vec<String> = language_set.into_iter().collect();
+
+        if languages.len() < 2 {
+            return Err(anyhow!("Training requires at least two distinct languages"));
+        }
+
+        // Encode language labels as integers.
+        let language_ids: HashMap<String, usize> = languages
+            .iter()
+            .enumerate()
+            .map(|(id, language)| (language.clone(), id))
+            .collect();
+
+        // Extract character n-grams from each document.
+        let documents: Vec<Vec<String>> = valid_samples
+            .iter()
+            .map(|sample| extract_ngrams(&sample.text))
+            .collect();
+
+        // Calculate document frequency for every feature.
+        let mut document_frequency: HashMap<String, usize> = HashMap::new();
+
+        for document in &documents {
+            let unique_features: BTreeSet<&str> = document.iter().map(String::as_str).collect();
+
+            for feature in unique_features {
+                *document_frequency.entry(feature.to_string()).or_insert(0) += 1;
+            }
+        }
+
+        // Rank features by document frequency.
+        let mut ranked_features: Vec<(String, usize)> = document_frequency
+            .iter()
+            .map(|(feature, frequency)| (feature.clone(), *frequency))
+            .collect();
+
+        ranked_features.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+        ranked_features.truncate(MAX_FEATURES);
+
+        // Create a stable vocabulary.
+        let mut selected_features: Vec<String> = ranked_features
+            .into_iter()
+            .map(|(feature, _)| feature)
+            .collect();
+
+        selected_features.sort();
+
+        if selected_features.is_empty() {
+            return Err(anyhow!(
+                "No character n-grams found. Use longer training texts."
+            ));
+        }
+
+        let vocabulary: HashMap<String, usize> = selected_features
+            .iter()
+            .enumerate()
+            .map(|(index, feature)| (feature.clone(), index))
+            .collect();
+
+        // Calculate smoothed IDF.
+        //
+        // IDF(t) = ln((N + 1) / (DF(t) + 1)) + 1
+        let document_count = documents.len() as f64;
+
+        let idf: Vec<f64> = selected_features
+            .iter()
+            .map(|feature| {
+                let df = *document_frequency.get(feature).unwrap_or(&0) as f64;
+
+                ((document_count + 1.0) / (df + 1.0)).ln() + 1.0
+            })
+            .collect();
+
+        // Build the dense TF-IDF feature matrix.
+        let mut feature_values = Vec::with_capacity(documents.len() * vocabulary.len());
+
+        for document in &documents {
+            let vector = vectorize(document, &vocabulary, &idf);
+
+            feature_values.extend(vector);
+        }
+
+        let records = Array2::from_shape_vec((documents.len(), vocabulary.len()), feature_values)
+            .map_err(|error| anyhow!("Failed to create feature matrix: {error}"))?;
+
+        // Convert labels to class IDs.
+        let targets = Array1::from(
+            valid_samples
+                .iter()
+                .map(|sample| language_ids[sample.language.trim()])
+                .collect::<Vec<usize>>(),
+        );
+
+        let dataset = Dataset::new(records, targets);
+
+        // Train multinomial logistic regression.
+        let classifier = MultiLogisticRegression::default()
+            .max_iterations(200)
+            .fit(&dataset)
+            .map_err(|error| anyhow!("Logistic regression training failed: {error}"))?;
+
+        Ok(Self {
+            vocabulary,
+            idf,
+            languages,
+            classifier,
+        })
+    }
+```
+
+**Training Steps:**
+1. **Lines 24-32**: Filter valid samples (non-empty text and language)
+2. **Lines 34-45**: Build deterministic label set (BTreeSet for consistent ordering)
+3. **Lines 47-52**: Map languages to integer IDs
+4. **Lines 54-58**: Extract n-grams from all documents
+5. **Lines 60-69**: Compute document frequency (binary - once per document)
+6. **Lines 71-79**: Rank by DF, keep top 4000
+7. **Lines 81-93**: Sort vocabulary alphabetically for determinism
+8. **Lines 95-113**: Compute smoothed IDF weights
+9. **Lines 115-125**: Build dense TF-IDF matrix (documents × vocabulary)
+10. **Lines 127-133**: Convert labels to class indices
+11. **Lines 135-141**: Train multinomial logistic regression (200 max iterations)
+
+#### Prediction (Lines 159-203)
+
+```rust
+    pub fn predict(&self, text: &str) -> Option<(String, f64)> {
+        if text.trim().is_empty() {
+            return None;
+        }
+
+        let features = extract_ngrams(text);
+
+        if features.is_empty() {
+            return None;
+        }
+
+        // Use the same vocabulary and IDF as training.
+        let vector = vectorize(&features, &self.vocabulary, &self.idf);
+
+        // Reject inputs that have no known features.
+        if vector.iter().all(|value| *value == 0.0) {
+            return None;
+        }
+
+        let records = Array2::from_shape_vec((1, self.vocabulary.len()), vector).ok()?;
+
+        let probabilities = self.classifier.predict_probabilities(&records);
+
+        // Select the class with the highest predicted probability.
+        let mut best: Option<(usize, f64)> = None;
+
+        for (column, &class_id) in self.classifier.classes().iter().enumerate() {
+            if column >= probabilities.ncols() || class_id >= self.languages.len() {
+                continue;
+            }
+
+            let probability = probabilities[[0, column]];
+
+            if best.map_or(true, |(_, best_probability)| probability > best_probability) {
+                best = Some((class_id, probability));
+            }
+        }
+
+        let (class_id, probability) = best?;
+
+        Some((
+            self.languages[class_id].clone(),
+            probability.clamp(0.0, 1.0),
+        ))
+    }
+```
+
+**Prediction Pipeline:**
+1. **Lines 160-168**: Extract n-grams, handle empty input
+2. **Line 171**: Vectorize using training vocabulary and IDF
+3. **Lines 174-176**: Reject if no known features (all zeros)
+4. **Lines 178-195**: Get probabilities, find max probability class
+5. **Lines 197-202**: Return language name and confidence
+
+#### Helper Functions (Lines 206-265)
+
+```rust
+// Convert character n-grams into a normalized TF-IDF vector.
+fn vectorize(features: &[String], vocabulary: &HashMap<String, usize>, idf: &[f64]) -> Vec<f64> {
+    let mut counts: HashMap<usize, usize> = HashMap::new();
+
+    let mut known_feature_count = 0usize;
+
+    for feature in features {
+        if let Some(&index) = vocabulary.get(feature) {
+            *counts.entry(index).or_insert(0) += 1;
+            known_feature_count += 1;
+        }
+    }
+
+    let mut vector = vec![0.0; vocabulary.len()];
+
+    if known_feature_count == 0 {
+        return vector;
+    }
+
+    // TF-IDF = term frequency * inverse document frequency.
+    for (index, count) in counts {
+        let tf = count as f64 / known_feature_count as f64;
+
+        vector[index] = tf * idf[index];
+    }
+
+    // L2 normalization.
+    let norm = vector.iter().map(|value| value * value).sum::<f64>().sqrt();
+
+    if norm > 0.0 {
+        for value in &mut vector {
+            *value /= norm;
+        }
+    }
+
+    vector
+}
+
+// Extract character n-grams of lengths 2, 3, and 4.
+fn extract_ngrams(text: &str) -> Vec<String> {
+    let normalized: Vec<char> = text
+        .to_lowercase()
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+
+    let mut features = Vec::new();
+
+    for n in MIN_NGRAM..=MAX_NGRAM {
+        if normalized.len() < n {
+            continue;
+        }
+
+        for window in normalized.windows(n) {
+            features.push(window.iter().collect::<String>());
+        }
+    }
+
+    features
+}
+```
+
+**vectorize() (Lines 207-242):**
+- Count occurrences of known n-grams
+- TF = count / total_known_features
+- TF-IDF = TF × IDF
+- L2 normalize the final vector
+
+**extract_ngrams() (Lines 244-265):**
+- Lowercase, remove whitespace
+- Extract overlapping windows of size 2, 3, 4
+- Returns all n-grams as strings
+
+### main.rs - Interactive CLI (Lines 1-84)
+
+```rust
+mod dataset;
+mod model;
+
+use anyhow::{Context, Result};
+use std::io::{self, Write};
+
+use crate::dataset::load_dataset;
+use crate::model::LanguageModel;
+
+fn main() -> Result<()> {
+    let dataset_path = "data/languages.json";
+
+    println!("==================================");
+    println!("     Rust Language Detection");
+    println!("==================================");
+    println!();
+
+    // Load the training dataset.
+    let samples = load_dataset(dataset_path)
+        .with_context(|| format!("Could not load dataset from {dataset_path}"))?;
+
+    println!("Loaded {} training samples.", samples.len());
+
+    // Train the machine-learning model.
+    println!("Training logistic regression...");
+
+    let model = LanguageModel::train(&samples)?;
+
+    println!("Training completed.");
+    println!();
+
+    println!("Number of languages: {}", model.language_count());
+
+    println!("Vocabulary size: {}", model.vocabulary_size());
+
+    println!();
+    println!("Enter text to detect its language.");
+    println!("Type 'exit' or 'quit' to stop.");
+    println!();
+
+    let stdin = io::stdin();
+
+    loop {
+        print!("text> ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+
+        if stdin.read_line(&mut input)? == 0 {
+            break;
+        }
+
+        let input = input.trim();
+
+        if input.eq_ignore_ascii_case("exit") || input.eq_ignore_ascii_case("quit") {
+            println!("Goodbye!");
+            break;
+        }
+
+        if input.is_empty() {
+            continue;
+        }
+
+        match model.predict(input) {
+            Some((language, score)) => {
+                println!("Predicted language: {language}");
+
+                println!("Model score: {:.2}%", score * 100.0);
+            }
+
+            None => {
+                println!(
+                    "Unable to predict the language. \
+                     The text may be too short or contain \
+                     no known character features."
+                );
+            }
+        }
+
+        println!();
+    }
+
+    Ok(())
+}
+```
+
+## N-gram Features
+
+- **Unigrams** (1-gram): Individual characters - NOT used
+- **Bigrams** (2-gram): Character pairs - "th", "he", "in", etc.
+- **Trigrams** (3-gram): Character triplets - "the", "ing", "ion", etc.
+- **4-grams**: Character quadruplets - "tion", "ment", "ence", etc.
+
+Higher-order n-grams capture more language-specific patterns but require more data.
+
+## Expected Output
+
+```
+==================================
+     Rust Language Detection
+==================================
+
+Loaded 1000 training samples.
+Training logistic regression...
+Training completed.
+
+Number of languages: 15
+Vocabulary size: 4000
+
+Enter text to detect its language.
+Type 'exit' or 'quit' to stop.
+
+text> Hello, how are you today?
+Predicted language: English
+Model score: 98.76%
+
+text> Bonjour, comment allez-vous?
+Predicted language: French
+Model score: 95.23%
+
+text> exit
+Goodbye!
+```
